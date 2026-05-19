@@ -1,4 +1,4 @@
-# Omiiba Connect
+# Omiiba Connect — Sony Headphones macOS Client
 
 Unofficial macOS companion for **Sony WH-1000XM3 / XM4 / XM5 / XM6**, based on [Plutoberth/SonyHeadphonesClient](https://github.com/Plutoberth/SonyHeadphonesClient) with extended protocol support from [Gadgetbridge](https://github.com/Freeyourgadget/Gadgetbridge).
 

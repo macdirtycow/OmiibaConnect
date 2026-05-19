@@ -12,6 +12,8 @@
 	<string>Omiiba Connect</string>
 	<key>CFBundleDisplayName</key>
 	<string>Omiiba Connect</string>
+	<key>CFBundleGetInfoString</key>
+	<string>Omiiba Connect — Sony Headphones macOS Client</string>
 	<key>CFBundleShortVersionString</key>
 	<string>2.1.2</string>
 	<key>CFBundleVersion</key>
