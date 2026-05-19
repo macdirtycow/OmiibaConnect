@@ -53,7 +53,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 @implementation ViewController
 @synthesize connectedLabel, connectButton, ANCSlider, ANCValueLabel, focusOnVoice, ANCEnabled, ANCValuePrefixLabel, virtualSoundLabel, soundPositionLabel, surroundLabel, soundPosition, surround;
 @synthesize batteryLabel, codecLabel, firmwareLabel, eqPopup, touchSensorCheckbox, voiceGuidanceCheckbox, refreshButton;
-@synthesize batteryIndicator, connectionIndicator, refreshSpinner, scrollView;
+@synthesize batteryIndicator, connectionIndicator, refreshSpinner, scrollView, modelLabel;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -159,11 +159,17 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     OmiibaConstrainWidth(appTitle, kContentWidth);
     [root addArrangedSubview:appTitle];
 
-    NSTextField* appSubtitle = [NSTextField labelWithString:@"WH-1000XM3 companion"];
+    NSTextField* appSubtitle = [NSTextField labelWithString:@"Sony WH-1000XM3 / XM4 / XM5 / XM6"];
     appSubtitle.font = [NSFont systemFontOfSize:12];
     appSubtitle.textColor = NSColor.secondaryLabelColor;
     OmiibaConstrainWidth(appSubtitle, kContentWidth);
     [root addArrangedSubview:appSubtitle];
+
+    self.modelLabel = [NSTextField labelWithString:@"Model: not connected"];
+    self.modelLabel.font = [NSFont systemFontOfSize:11];
+    self.modelLabel.textColor = NSColor.tertiaryLabelColor;
+    OmiibaConstrainWidth(self.modelLabel, kContentWidth);
+    [root addArrangedSubview:self.modelLabel];
 
     self.connectionIndicator = [[NSView alloc] initWithFrame:NSZeroRect];
     self.connectionIndicator.wantsLayer = YES;
@@ -182,7 +188,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 
     [connectButton setBezelStyle:NSBezelStyleRounded];
     [connectButton setControlSize:NSControlSizeLarge];
-    [connectButton setTitle:@"Connect to WH-1000XM3"];
+    [connectButton setTitle:@"Connect headphones"];
     OmiibaConstrainWidth(connectButton, kContentWidth);
     [root addArrangedSubview:connectButton];
 
@@ -293,6 +299,49 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     ]];
 
     [self setConnectionIndicatorConnected:NO];
+    [self applyCapabilitiesToUI];
+}
+
+- (void)applyCapabilitiesToUI {
+    if (headphones == nullptr) {
+        [self.modelLabel setStringValue:@"Model: not connected"];
+        [ANCSlider setMaxValue:19];
+        [ANCSlider setNumberOfTickMarks:20];
+        [self.eqPopup setHidden:NO];
+        [self.touchSensorCheckbox setHidden:NO];
+        [self.voiceGuidanceCheckbox setHidden:NO];
+        [virtualSoundLabel setHidden:NO];
+        [surround setHidden:NO];
+        [soundPosition setHidden:NO];
+        [surroundLabel setHidden:NO];
+        [soundPositionLabel setHidden:NO];
+        return;
+    }
+
+    const auto& caps = headphones->getCapabilities();
+    const auto& status = headphones->getDeviceStatus();
+    NSString* modelLine = [NSString stringWithFormat:@"Model: %s  ·  Protocol: %s",
+        status.modelName.c_str(),
+        status.protocolLabel.c_str()];
+    [self.modelLabel setStringValue:modelLine];
+
+    const int maxLevel = caps.asmMaxLevel;
+    [ANCSlider setMaxValue:maxLevel];
+    [ANCSlider setNumberOfTickMarks:maxLevel + 1];
+    if ([ANCSlider intValue] > maxLevel) {
+        [ANCSlider setIntValue:maxLevel];
+    }
+
+    [self.eqPopup setHidden:!caps.supportsEqualizer];
+    [self.touchSensorCheckbox setHidden:!caps.supportsTouchSensor];
+    [self.voiceGuidanceCheckbox setHidden:!caps.supportsVoiceGuidance];
+
+    const BOOL virtualVisible = caps.supportsVirtualSound;
+    [virtualSoundLabel setHidden:!virtualVisible];
+    [surround setHidden:!virtualVisible];
+    [soundPosition setHidden:!virtualVisible];
+    [surroundLabel setHidden:!virtualVisible];
+    [soundPositionLabel setHidden:!virtualVisible];
 }
 
 - (void)setConnectionIndicatorConnected:(BOOL)connected {
@@ -388,7 +437,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     [connectedLabel setStringValue:text];
     [surround selectItemAtIndex:0];
     [soundPosition selectItemAtIndex:0];
-    [connectButton setTitle:@"Connect to WH-1000XM3"];
+    [connectButton setTitle:@"Connect headphones"];
     statusItem.button.image = [NSImage imageNamed:@"NSRefreshTemplate"];
     [self setConnectionIndicatorConnected:NO];
     [self setExtendedControlsEnabled:NO];
@@ -397,6 +446,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     [self.batteryIndicator setDoubleValue:0];
     [self.codecLabel setStringValue:@"Codec: —"];
     [self.firmwareLabel setStringValue:@"Firmware: —"];
+    [self applyCapabilitiesToUI];
 }
 
 - (void)statusItemClick:(id)sender {
@@ -406,8 +456,9 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
         headphones->setAsmLevel(0);
         [focusOnVoice setEnabled:FALSE];
     } else {
-        [ANCSlider setIntValue:19];
-        headphones->setAsmLevel(19);
+        const int maxLevel = headphones->getCapabilities().asmMaxLevel;
+        [ANCSlider setIntValue:maxLevel];
+        headphones->setAsmLevel(maxLevel);
         [focusOnVoice setEnabled:TRUE];
     }
 
@@ -461,8 +512,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
             [ANCValueLabel setTextColor:NSColor.labelColor];
             statusItem.button.image = [NSImage imageNamed:@"NSHomeTemplate"];
             headphones = new Headphones(bt);
+            headphones->configureForDevice([[device nameOrAddress] UTF8String]);
             [self setConnectionIndicatorConnected:YES];
             [self setExtendedControlsEnabled:YES];
+            [self applyCapabilitiesToUI];
             [self refreshFromDevice:sender];
         } else {
             [self displayDisconnectedWithText:@"Connection timed out"];
@@ -614,6 +667,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
         [self.eqPopup selectItemAtIndex:[self popupIndexForEqPreset:headphones->getEqualizerPreset()]];
         [self.touchSensorCheckbox setState:headphones->getTouchSensorEnabled() ? NSControlStateValueOn : NSControlStateValueOff];
         [self.voiceGuidanceCheckbox setState:headphones->getVoiceGuidanceEnabled() ? NSControlStateValueOn : NSControlStateValueOff];
+        [self applyCapabilitiesToUI];
     });
 }
 

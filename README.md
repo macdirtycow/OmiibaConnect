@@ -1,6 +1,6 @@
 # Omiiba Connect
 
-Unofficial macOS companion for **Sony WH-1000XM3**, based on [Plutoberth/SonyHeadphonesClient](https://github.com/Plutoberth/SonyHeadphonesClient) with extended protocol support from [Gadgetbridge](https://github.com/Freeyourgadget/Gadgetbridge).
+Unofficial macOS companion for **Sony WH-1000XM3 / XM4 / XM5 / XM6**, based on [Plutoberth/SonyHeadphonesClient](https://github.com/Plutoberth/SonyHeadphonesClient) with extended protocol support from [Gadgetbridge](https://github.com/Freeyourgadget/Gadgetbridge).
 
 **Repository:** https://github.com/macdirtycow/OmiibaConnect
 
@@ -38,7 +38,8 @@ See [docs/device-support.md](docs/device-support.md) for full parity vs the mobi
 
 - macOS 11+
 - Xcode (to build)
-- WH-1000XM3 paired with your Mac for audio; use **Connect** in the app for the vendor settings channel
+- Supported: **WH-1000XM3**, **WH-1000XM4** (best), **WH-1000XM5** (good), **WH-1000XM6** (partial — see [docs/device-support.md](docs/device-support.md))
+- Headphones paired with your Mac for audio; use **Connect headphones** for the vendor settings channel
 
 ## Build
 
