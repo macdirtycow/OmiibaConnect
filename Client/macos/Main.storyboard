@@ -12,11 +12,11 @@
                 <application id="hnw-xV-0zn" sceneMemberID="viewController">
                     <menu key="mainMenu" title="Main Menu" systemMenu="main" id="AYu-sK-qS6">
                         <items>
-                            <menuItem title="SonyHeadphonesClient" id="1Xt-HY-uBw">
+                            <menuItem title="Omiiba Connect" id="1Xt-HY-uBw">
                                 <modifierMask key="keyEquivalentModifierMask"/>
-                                <menu key="submenu" title="SonyHeadphonesClient" systemMenu="apple" id="uQy-DD-JDr">
+                                <menu key="submenu" title="Omiiba Connect" systemMenu="apple" id="uQy-DD-JDr">
                                     <items>
-                                        <menuItem title="About SonyHeadphonesClient" id="5kV-Vb-QxS">
+                                        <menuItem title="About Omiiba Connect" id="5kV-Vb-QxS">
                                             <modifierMask key="keyEquivalentModifierMask"/>
                                             <connections>
                                                 <action selector="orderFrontStandardAboutPanel:" target="Ady-hI-5gd" id="Exp-CZ-Vem"/>
@@ -30,7 +30,7 @@
                                             <menu key="submenu" title="Services" systemMenu="services" id="hz9-B4-Xy5"/>
                                         </menuItem>
                                         <menuItem isSeparatorItem="YES" id="4je-JR-u6R"/>
-                                        <menuItem title="Hide SonyHeadphonesClient" keyEquivalent="h" id="Olw-nP-bQN">
+                                        <menuItem title="Hide Omiiba Connect" keyEquivalent="h" id="Olw-nP-bQN">
                                             <connections>
                                                 <action selector="hide:" target="Ady-hI-5gd" id="PnN-Uc-m68"/>
                                             </connections>
@@ -48,7 +48,7 @@
                                             </connections>
                                         </menuItem>
                                         <menuItem isSeparatorItem="YES" id="kCx-OE-vgT"/>
-                                        <menuItem title="Quit SonyHeadphonesClient" keyEquivalent="q" id="4sb-4s-VLi">
+                                        <menuItem title="Quit Omiiba Connect" keyEquivalent="q" id="4sb-4s-VLi">
                                             <connections>
                                                 <action selector="terminate:" target="Ady-hI-5gd" id="Te7-pn-YzF"/>
                                             </connections>
@@ -129,12 +129,11 @@
         <scene sceneID="R2V-B0-nI4">
             <objects>
                 <windowController id="B8D-0N-5wS" sceneMemberID="viewController">
-                    <window key="window" title="SonyHeadphonesClient" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="IQv-IB-iLA">
+                    <window key="window" title="Omiiba Connect" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="IQv-IB-iLA">
                         <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
-                        <rect key="contentRect" x="0.0" y="995" width="423" height="310"/>
+                        <rect key="contentRect" x="0.0" y="995" width="440" height="580"/>
                         <rect key="screenRect" x="0.0" y="0.0" width="1920" height="1200"/>
-                        <value key="minSize" type="size" width="423" height="310"/>
-                        <value key="maxSize" type="size" width="423" height="310"/>
+                        <value key="minSize" type="size" width="440" height="580"/>
                     </window>
                     <connections>
                         <segue destination="XfG-lQ-9wD" kind="relationship" relationship="window.shadowedContentViewController" id="lIw-zv-7Km"/>
@@ -149,7 +148,7 @@
             <objects>
                 <viewController id="XfG-lQ-9wD" customClass="ViewController" sceneMemberID="viewController">
                     <view key="view" wantsLayer="YES" id="m2S-Jp-Qdl">
-                        <rect key="frame" x="0.0" y="0.0" width="423" height="310"/>
+                        <rect key="frame" x="0.0" y="0.0" width="440" height="580"/>
                         <autoresizingMask key="autoresizingMask"/>
                         <subviews>
                             <button verticalHuggingPriority="750" fixedFrame="YES" translatesAutoresizingMaskIntoConstraints="NO" id="aqv-Ws-wbl">
@@ -168,8 +167,8 @@
                                 <autoresizingMask key="autoresizingMask" flexibleMinX="YES" flexibleMaxX="YES" flexibleMinY="YES"/>
                                 <textFieldCell key="cell" selectable="YES" id="402-em-glw">
                                     <font key="font" metaFont="system"/>
-                                    <string key="title">! This product is not affiliated with Sony. Use at your own risk. !
-Source: https://github.com/Plutoberth/SonyHeadphonesClient</string>
+                                    <string key="title">Unofficial companion for Sony WH-1000XM3. Not affiliated with Sony.
+Based on Plutoberth/SonyHeadphonesClient — use at your own risk.</string>
                                     <color key="textColor" name="labelColor" catalog="System" colorSpace="catalog"/>
                                     <color key="backgroundColor" name="secondaryLabelColor" catalog="System" colorSpace="catalog"/>
                                 </textFieldCell>

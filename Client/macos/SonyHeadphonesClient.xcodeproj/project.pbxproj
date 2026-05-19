@@ -10,6 +10,7 @@
 		A87B328B259FAA8B00EA6551 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A87B328A259FAA8B00EA6551 /* Cocoa.framework */; };
 		A87B328E259FAB0E00EA6551 /* IOBluetoothUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A87B328D259FAB0E00EA6551 /* IOBluetoothUI.framework */; };
 		A8A3D31E283EC38600148E80 /* Headphones.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A8A3D31D283EC38600148E80 /* Headphones.cpp */; };
+		A8B00104283EC50000148E80 /* ProtocolParser.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A8B00103283EC50000148E80 /* ProtocolParser.cpp */; };
 		A8DC78EB2576923D00447738 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = A8DC78EA2576923D00447738 /* main.mm */; };
 		A8DC78EC2576923D00447738 /* MacOSBluetoothConnector.mm in Sources */ = {isa = PBXBuildFile; fileRef = A8DC78E82576923D00447738 /* MacOSBluetoothConnector.mm */; };
 		A8DC78F12576952E00447738 /* BluetoothWrapper.cpp in Sources */ = {isa = PBXBuildFile; fileRef = A8DC78EF2576952E00447738 /* BluetoothWrapper.cpp */; };
@@ -20,6 +21,7 @@
 		A8DC792C25769C9900447738 /* AppDelegate.mm in Sources */ = {isa = PBXBuildFile; fileRef = A8DC792825769C9900447738 /* AppDelegate.mm */; };
 		A8DC792D25769C9900447738 /* ViewController.mm in Sources */ = {isa = PBXBuildFile; fileRef = A8DC792A25769C9900447738 /* ViewController.mm */; };
 		A8DC793225769EA500447738 /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = A8DC78E92576923D00447738 /* Main.storyboard */; };
+		A8C00102283EC60000148E81 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A8C00101283EC60000148E81 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,6 +31,10 @@
 		A87B328D259FAB0E00EA6551 /* IOBluetoothUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOBluetoothUI.framework; path = System/Library/Frameworks/IOBluetoothUI.framework; sourceTree = SDKROOT; };
 		A8A3D31C283EC38500148E80 /* Headphones.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = Headphones.h; path = ../Headphones.h; sourceTree = "<group>"; };
 		A8A3D31D283EC38600148E80 /* Headphones.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = Headphones.cpp; path = ../Headphones.cpp; sourceTree = "<group>"; };
+		A8B00101283EC50000148E80 /* DeviceStatus.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = DeviceStatus.h; path = ../DeviceStatus.h; sourceTree = "<group>"; };
+		A8B00102283EC50000148E80 /* ProtocolParser.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = ProtocolParser.h; path = ../ProtocolParser.h; sourceTree = "<group>"; };
+		A8B00103283EC50000148E80 /* ProtocolParser.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; name = ProtocolParser.cpp; path = ../ProtocolParser.cpp; sourceTree = "<group>"; };
+		A8C00101283EC60000148E81 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A8DC78E32576922700447738 /* info.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = info.plist; sourceTree = "<group>"; };
 		A8DC78E62576922D00447738 /* SonyHeadphonesClient.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SonyHeadphonesClient.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A8DC78E72576923D00447738 /* MacOSBluetoothConnector.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MacOSBluetoothConnector.h; sourceTree = "<group>"; };
@@ -75,6 +81,7 @@
 				A8DC78E82576923D00447738 /* MacOSBluetoothConnector.mm */,
 				A8DC78EA2576923D00447738 /* main.mm */,
 				A8DC78E92576923D00447738 /* Main.storyboard */,
+				A8C00101283EC60000148E81 /* Assets.xcassets */,
 				A8DC78E32576922700447738 /* info.plist */,
 				A8DC78E62576922D00447738 /* SonyHeadphonesClient.app */,
 				A8DC78EE2576950500447738 /* IBluetoothConnector.h */,
@@ -89,6 +96,9 @@
 				A8DC78FE2576967D00447738 /* ByteMagic.h */,
 				A8A3D31D283EC38600148E80 /* Headphones.cpp */,
 				A8A3D31C283EC38500148E80 /* Headphones.h */,
+				A8B00101283EC50000148E80 /* DeviceStatus.h */,
+				A8B00102283EC50000148E80 /* ProtocolParser.h */,
+				A8B00103283EC50000148E80 /* ProtocolParser.cpp */,
 				A8DC792B25769C9900447738 /* AppDelegate.h */,
 				A8DC792825769C9900447738 /* AppDelegate.mm */,
 				A8DC792925769C9900447738 /* ViewController.h */,
@@ -164,6 +174,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A8DC793225769EA500447738 /* Main.storyboard in Resources */,
+				A8C00102283EC60000148E81 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -175,6 +186,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A8A3D31E283EC38600148E80 /* Headphones.cpp in Sources */,
+				A8B00104283EC50000148E80 /* ProtocolParser.cpp in Sources */,
 				A8DC78EB2576923D00447738 /* main.mm in Sources */,
 				A8DC78EC2576923D00447738 /* MacOSBluetoothConnector.mm in Sources */,
 				A8DC792D25769C9900447738 /* ViewController.mm in Sources */,
@@ -303,6 +315,7 @@
 		A8DC78D925757BF500447738 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_ENTITLEMENTS = SonyHeadphonesClient.entitlements;
@@ -315,20 +328,24 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.10;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"__HEADPHONES_APP_VERSION__=\\\"2.0.0\\\"",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_CPLUSPLUSFLAGS = (
 					"-std=c++17",
 					"-stdlib=libc++",
 					"$(OTHER_CFLAGS)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.semvis123.SonyHeadphonesClient;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.omiiba.connect;
+				PRODUCT_NAME = OmiibaConnect;
 			};
 			name = Debug;
 		};
 		A8DC78DA25757BF500447738 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_ENTITLEMENTS = SonyHeadphonesClient.entitlements;
@@ -341,14 +358,17 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MACOSX_DEPLOYMENT_TARGET = 10.10;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"__HEADPHONES_APP_VERSION__=\\\"2.0.0\\\"",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_CPLUSPLUSFLAGS = (
 					"-std=c++17",
 					"-stdlib=libc++",
 					"$(OTHER_CFLAGS)",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.semvis123.SonyHeadphonesClient;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_BUNDLE_IDENTIFIER = dev.omiiba.connect;
+				PRODUCT_NAME = OmiibaConnect;
 			};
 			name = Release;
 		};

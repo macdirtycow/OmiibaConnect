@@ -133,23 +133,40 @@ namespace CommandSerializer
 		return ret;
 	}
 
+	static unsigned int _readSizeBE(const Buffer& unescaped)
+	{
+		if (unescaped.size() < 6) {
+			throw std::runtime_error("Invalid message: missing size field");
+		}
+		return (static_cast<unsigned char>(unescaped[2]) << 24)
+			| (static_cast<unsigned char>(unescaped[3]) << 16)
+			| (static_cast<unsigned char>(unescaped[4]) << 8)
+			| static_cast<unsigned char>(unescaped[5]);
+	}
+
 	Message unpackBtMessage(const Buffer& src)
 	{
 		//Message data format: ESCAPE_SPECIALS(<DATA_TYPE><SEQ_NUMBER><BIG ENDIAN 4 BYTE SIZE OF UNESCAPED DATA><DATA><1 BYTE CHECKSUM>)
 		auto unescaped = _unescapeSpecials(src);
 
-		if (src.size() < 7)
+		if (unescaped.size() < 7)
 		{
 			throw std::runtime_error("Invalid message: Smaller than the minimum message size");
 		}
 
 		Message ret;
-		ret.dataType = static_cast<DATA_TYPE>(src[0]);
-		ret.seqNumber = src[1];
-		if ((unsigned char)src[src.size() - 1] != _sumChecksum(src.data(), src.size() - 1))
+		ret.dataType = static_cast<DATA_TYPE>(unescaped[0]);
+		ret.seqNumber = unescaped[1];
+		const auto dataSize = _readSizeBE(unescaped);
+		if (unescaped.size() < 6 + dataSize + 1)
+		{
+			throw std::runtime_error("Invalid message: payload shorter than declared size");
+		}
+		if ((unsigned char)unescaped[unescaped.size() - 1] != _sumChecksum(unescaped.data(), unescaped.size() - 1))
 		{
 			throw RecoverableException("Invalid checksum!", true);
 		}
+		ret.payload.assign(unescaped.begin() + 6, unescaped.begin() + 6 + dataSize);
 		return ret;
 	}
 
@@ -192,6 +209,41 @@ namespace CommandSerializer
 		ret.push_back(static_cast<unsigned char>(type));
 		ret.push_back(preset);
 
+		return ret;
+	}
+
+	Buffer serializePayload(const Buffer& payloadBytes)
+	{
+		return payloadBytes;
+	}
+
+	Buffer serializeEqualizerPreset(EQ_PRESET preset)
+	{
+		Buffer ret;
+		ret.push_back(static_cast<unsigned char>(PAYLOAD_CMD::EQ_SET));
+		ret.push_back(0x01);
+		ret.push_back(static_cast<unsigned char>(preset));
+		ret.push_back(0x00);
+		return ret;
+	}
+
+	Buffer serializeTouchSensor(bool enabled)
+	{
+		Buffer ret;
+		ret.push_back(static_cast<unsigned char>(PAYLOAD_CMD::TOUCH_SET));
+		ret.push_back(static_cast<unsigned char>(GS_INQUIRED_TYPE::GENERAL_SETTING2));
+		ret.push_back(0x01);
+		ret.push_back(enabled ? 0x01 : 0x00);
+		return ret;
+	}
+
+	Buffer serializeVoiceGuidance(bool enabled)
+	{
+		Buffer ret;
+		ret.push_back(static_cast<unsigned char>(VOICE_GUIDANCE_CMD::SET_PARAM));
+		ret.push_back(static_cast<unsigned char>(VOICE_GUIDANCE_INQUIRED::VOICE_GUIDANCE_SETTING));
+		ret.push_back(static_cast<unsigned char>(VOICE_GUIDANCE_INQUIRED::VOICE_GUIDANCE_SETTING));
+		ret.push_back(enabled ? 0x01 : 0x00);
 		return ret;
 	}
 

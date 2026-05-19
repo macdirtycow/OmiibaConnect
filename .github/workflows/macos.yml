@@ -1,0 +1,25 @@
+name: macOS
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build Omiiba Connect
+        run: ./scripts/build-macos.sh
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: OmiibaConnect-macOS
+          path: build/DerivedData/Build/Products/Release/OmiibaConnect.app
+          if-no-files-found: error
