@@ -4,7 +4,7 @@ constexpr unsigned char ESCAPED_BYTE_SENTRY = 61;
 constexpr unsigned char ESCAPED_60 = 44;
 constexpr unsigned char ESCAPED_61 = 45;
 constexpr unsigned char ESCAPED_62 = 46;
-constexpr int MAX_STEPS_WH_1000_XM3 = 19;
+constexpr int DEFAULT_ASM_MAX_LEVEL = 19;
 
 namespace CommandSerializer
 {
@@ -170,10 +170,10 @@ namespace CommandSerializer
 		return ret;
 	}
 
-	NC_DUAL_SINGLE_VALUE getDualSingleForAsmLevel(char asmLevel)
+	NC_DUAL_SINGLE_VALUE getDualSingleForAsmLevel(char asmLevel, int maxAsmLevel)
 	{
 		NC_DUAL_SINGLE_VALUE val = NC_DUAL_SINGLE_VALUE::OFF;
-		if (asmLevel > MAX_STEPS_WH_1000_XM3)
+		if (asmLevel > maxAsmLevel)
 		{
 			throw std::runtime_error("Exceeded max steps");
 		}
@@ -188,17 +188,46 @@ namespace CommandSerializer
 		return val;
 	}
 
-	Buffer serializeNcAndAsmSetting(NC_ASM_EFFECT ncAsmEffect, NC_ASM_SETTING_TYPE ncAsmSettingType, ASM_SETTING_TYPE asmSettingType, ASM_ID asmId, char asmLevel)
+	Buffer serializeNcAndAsmSetting(NC_ASM_EFFECT ncAsmEffect, NC_ASM_SETTING_TYPE ncAsmSettingType, ASM_SETTING_TYPE asmSettingType, ASM_ID asmId, char asmLevel, int maxAsmLevel)
 	{
 		Buffer ret;
 		ret.push_back(static_cast<unsigned char>(COMMAND_TYPE::NCASM_SET_PARAM));
 		ret.push_back(static_cast<unsigned char>(NC_ASM_INQUIRED_TYPE::NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE));
 		ret.push_back(static_cast<unsigned char>(ncAsmEffect));
 		ret.push_back(static_cast<unsigned char>(ncAsmSettingType));
-		ret.push_back(static_cast<unsigned char>(getDualSingleForAsmLevel(asmLevel)));
+		ret.push_back(static_cast<unsigned char>(getDualSingleForAsmLevel(asmLevel, maxAsmLevel)));
 		ret.push_back(static_cast<unsigned char>(asmSettingType));
 		ret.push_back(static_cast<unsigned char>(asmId));
 		ret.push_back(asmLevel);
+		return ret;
+	}
+
+	Buffer serializeAmbientSoundControlV2(bool ambientEnabled, bool focusOnVoice, int asmLevel, bool windNoiseMode)
+	{
+		const unsigned char variant = windNoiseMode ? 0x17 : 0x15;
+		Buffer ret;
+		ret.push_back(static_cast<unsigned char>(PAYLOAD_CMD::NCASM_SET));
+		ret.push_back(variant);
+		ret.push_back(0x01);
+
+		if (!ambientEnabled) {
+			ret.push_back(0x00);
+			ret.push_back(0x00);
+			if (windNoiseMode) {
+				ret.push_back(0x02);
+			}
+			ret.push_back(focusOnVoice ? 0x01 : 0x00);
+			ret.push_back(0x00);
+			return ret;
+		}
+
+		ret.push_back(0x01);
+		ret.push_back(0x01);
+		if (windNoiseMode) {
+			ret.push_back(0x02);
+		}
+		ret.push_back(focusOnVoice ? 0x01 : 0x00);
+		ret.push_back(static_cast<char>(asmLevel));
 		return ret;
 	}
 

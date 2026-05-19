@@ -27,6 +27,7 @@
 /* Begin PBXFileReference section */
 		A863B14925A11DF500101F3B /* SonyHeadphonesClient.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SonyHeadphonesClient.entitlements; sourceTree = "<group>"; };
 		A87B327A259F69BA00EA6551 /* Constants.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = Constants.h; path = ../Constants.h; sourceTree = "<group>"; };
+		A8B00105283EC70000148E82 /* DeviceProfile.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = DeviceProfile.h; path = ../DeviceProfile.h; sourceTree = "<group>"; };
 		A87B328A259FAA8B00EA6551 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
 		A87B328D259FAB0E00EA6551 /* IOBluetoothUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOBluetoothUI.framework; path = System/Library/Frameworks/IOBluetoothUI.framework; sourceTree = SDKROOT; };
 		A8A3D31C283EC38500148E80 /* Headphones.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = Headphones.h; path = ../Headphones.h; sourceTree = "<group>"; };
@@ -77,6 +78,7 @@
 			children = (
 				A863B14925A11DF500101F3B /* SonyHeadphonesClient.entitlements */,
 				A87B327A259F69BA00EA6551 /* Constants.h */,
+				A8B00105283EC70000148E82 /* DeviceProfile.h */,
 				A8DC78E72576923D00447738 /* MacOSBluetoothConnector.h */,
 				A8DC78E82576923D00447738 /* MacOSBluetoothConnector.mm */,
 				A8DC78EA2576923D00447738 /* main.mm */,

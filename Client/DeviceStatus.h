@@ -23,4 +23,7 @@ struct DeviceStatus {
 	bool hasEqualizer = false;
 	bool hasTouchSensor = false;
 	bool hasVoiceGuidance = false;
+
+	std::string modelName;
+	std::string protocolLabel;
 };

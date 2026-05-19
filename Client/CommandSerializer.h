@@ -37,8 +37,9 @@ namespace CommandSerializer
 
 	Message unpackBtMessage(const Buffer& src);
 
-	NC_DUAL_SINGLE_VALUE getDualSingleForAsmLevel(char asmLevel);
-	Buffer serializeNcAndAsmSetting(NC_ASM_EFFECT ncAsmEffect, NC_ASM_SETTING_TYPE ncAsmSettingType, ASM_SETTING_TYPE asmSettingType, ASM_ID asmId, char asmLevel);
+	NC_DUAL_SINGLE_VALUE getDualSingleForAsmLevel(char asmLevel, int maxAsmLevel);
+	Buffer serializeNcAndAsmSetting(NC_ASM_EFFECT ncAsmEffect, NC_ASM_SETTING_TYPE ncAsmSettingType, ASM_SETTING_TYPE asmSettingType, ASM_ID asmId, char asmLevel, int maxAsmLevel);
+	Buffer serializeAmbientSoundControlV2(bool ambientEnabled, bool focusOnVoice, int asmLevel, bool windNoiseMode);
 	Buffer serializeVPTSetting(VPT_INQUIRED_TYPE type, unsigned char preset);
 	Buffer serializePayload(const Buffer& payloadBytes);
 	Buffer serializeEqualizerPreset(EQ_PRESET preset);

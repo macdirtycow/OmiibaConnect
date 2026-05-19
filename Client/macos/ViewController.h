@@ -35,4 +35,7 @@ NSStatusItem* statusItem;
 @property (strong, nonatomic) NSView *connectionIndicator;
 @property (strong, nonatomic) NSProgressIndicator *refreshSpinner;
 @property (strong, nonatomic) NSScrollView *scrollView;
+@property (strong, nonatomic) NSTextField *modelLabel;
+
+- (void)applyCapabilitiesToUI;
 @end

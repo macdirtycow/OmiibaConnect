@@ -3,9 +3,12 @@
 #include "SingleInstanceFuture.h"
 #include "BluetoothWrapper.h"
 #include "Constants.h"
+#include "DeviceProfile.h"
 #include "DeviceStatus.h"
 
 #include <mutex>
+#include <string>
+#include <string_view>
 
 template <class T>
 struct Property {
@@ -47,6 +50,9 @@ public:
 	bool getVoiceGuidanceEnabled() const;
 
 	const DeviceStatus& getDeviceStatus() const;
+	const DeviceCapabilities& getCapabilities() const;
+
+	void configureForDevice(std::string_view deviceName);
 
 	bool performConnectHandshake();
 	bool refreshFromDevice();
@@ -68,6 +74,8 @@ private:
 	std::mutex _propertyMtx;
 
 	DeviceStatus _deviceStatus;
+	DeviceCapabilities _capabilities;
+	std::string _deviceName;
 	BluetoothWrapper& _conn;
 };
 

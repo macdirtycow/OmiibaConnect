@@ -89,6 +89,37 @@ namespace ProtocolParser {
 		return true;
 	}
 
+	bool applyAmbientSoundControlV2(Headphones& headphones, const Buffer& payload) {
+		if (payload.size() < 7) {
+			return false;
+		}
+		if (payload[1] != 0x15 && payload[1] != 0x17) {
+			return false;
+		}
+
+		const bool includesWindNoise = payload[1] == 0x17 && payload.size() > 7;
+		bool ambientEnabled = false;
+		int asmLevel = 0;
+
+		if (payload[3] == 0x01 && payload[4] == 0x01) {
+			ambientEnabled = true;
+		}
+
+		const int focusIndex = includesWindNoise ? 6 : 5;
+		const int levelIndex = focusIndex + 1;
+		if (payload.size() <= static_cast<size_t>(levelIndex)) {
+			return false;
+		}
+
+		const bool focusOnVoice = payload[focusIndex] == 0x01;
+		if (ambientEnabled) {
+			asmLevel = static_cast<unsigned char>(payload[levelIndex]);
+		}
+
+		headphones.applyDeviceState(ambientEnabled, focusOnVoice, asmLevel);
+		return true;
+	}
+
 	bool applyVirtualSound(Headphones& headphones, const Buffer& payload) {
 		if (payload.size() != 3) {
 			return false;
