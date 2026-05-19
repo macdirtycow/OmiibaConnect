@@ -2,6 +2,8 @@
 
 Unofficial macOS companion for **Sony WH-1000XM3**, based on [Plutoberth/SonyHeadphonesClient](https://github.com/Plutoberth/SonyHeadphonesClient) with extended protocol support from [Gadgetbridge](https://github.com/Freeyourgadget/Gadgetbridge).
 
+**Repository:** https://github.com/macdirtycow/OmiibaConnect
+
 **This app is not affiliated with Sony.**
 
 ## Disclaimer
