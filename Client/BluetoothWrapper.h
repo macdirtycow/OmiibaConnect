@@ -8,6 +8,8 @@
 #include <string>
 #include <mutex>
 #include <optional>
+#include <initializer_list>
+#include <chrono>
 
 
 //Thread-safety: This class is thread-safe.
@@ -29,19 +31,31 @@ public:
 		unsigned char expectedRetCode,
 		int maxMessages = 12
 	);
+	std::optional<Buffer> sendQuery(
+		const Buffer& payloadBytes,
+		DATA_TYPE dataType,
+		std::initializer_list<unsigned char> expectedRetCodes,
+		int maxMessages = 12
+	);
 
 	bool isConnected() noexcept;
-	//Try to connect to the headphones
 	void connect(const std::string& addr);
 	void disconnect() noexcept;
 
 	std::vector<BluetoothDevice> getConnectedDevices();
 
 private:
-	CommandSerializer::Message _recvFramedMessage();
+	std::optional<CommandSerializer::Message> _tryRecvFramedMessage();
+	void _sendAck(unsigned char deviceSeqNumber);
 	void _waitForAck();
+	bool _tryWaitForAckAfterSend();
+	unsigned char _nextSendSequence();
+	void _onAckReceived(unsigned char ackSeq);
+	void _drainIncomingMessages(std::chrono::milliseconds duration);
 
 	std::unique_ptr<IBluetoothConnector> _connector;
 	std::mutex _connectorMtx;
-	unsigned int _seqNumber = 0;
+	unsigned char _seqNumber = 0;
+	Buffer _recvStaging;
+	bool _recvInMessage = false;
 };

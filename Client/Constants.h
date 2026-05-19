@@ -98,6 +98,8 @@ enum class PAYLOAD_CMD : unsigned char
 	// CONNECT category — must be sent before other queries (Sony app always starts here).
 	CONNECT_GET_PROTOCOL_INFO = 0x00,
 	CONNECT_RET_PROTOCOL_INFO = 0x01,
+	CONNECT_GET_CAPABILITY_INFO = 0x02,
+	CONNECT_RET_CAPABILITY_INFO = 0x03,
 	CONNECT_GET_DEVICE_INFO = 0x04,
 	CONNECT_RET_DEVICE_INFO = 0x05,
 	CONNECT_GET_SUPPORT_FUNCTION = 0x06,
@@ -105,8 +107,10 @@ enum class PAYLOAD_CMD : unsigned char
 
 	BATTERY_REQUEST = 0x10,
 	BATTERY_RET = 0x11,
+	BATTERY_NTFY = 0x13,
 	AUDIO_CODEC_REQUEST = 0x18,
 	AUDIO_CODEC_RET = 0x19,
+	AUDIO_CODEC_NTFY = 0x1b,
 	// Alias: device info uses CONNECT_GET_DEVICE_INFO + DeviceInfoInquiredType
 	FW_VERSION_REQUEST = CONNECT_GET_DEVICE_INFO,
 	FW_VERSION_RET = CONNECT_RET_DEVICE_INFO,
@@ -116,6 +120,7 @@ enum class PAYLOAD_CMD : unsigned char
 	EQ_GET = 0x56,
 	EQ_RET = 0x57,
 	EQ_SET = 0x58,
+	// NCASM_* = Noise Cancelling / Ambient Sound Mode (APK: NCASM_GET_PARAM 0x66, RET 0x67, SET 0x68).
 	NCASM_GET = 0x66,
 	NCASM_RET = 0x67,
 	NCASM_SET = 0x68,

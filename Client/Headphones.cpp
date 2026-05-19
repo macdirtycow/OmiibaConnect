@@ -53,6 +53,20 @@ int Headphones::getAsmLevel()
 	return this->_asmLevel.current;
 }
 
+int Headphones::getDisplayAsmLevel() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	return this->_asmLevel.isFulfilled() ? this->_asmLevel.current : this->_asmLevel.desired;
+}
+
+bool Headphones::hasPendingAmbientChanges() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	return !this->_ambientSoundControl.isFulfilled()
+		|| !this->_asmLevel.isFulfilled()
+		|| !this->_focusOnVoice.isFulfilled();
+}
+
 void Headphones::setSurroundPosition(SOUND_POSITION_PRESET val)
 {
 	std::lock_guard guard(this->_propertyMtx);
@@ -84,6 +98,18 @@ void Headphones::setEqualizerPreset(EQ_PRESET preset)
 EQ_PRESET Headphones::getEqualizerPreset() const
 {
 	return this->_eqPreset.current;
+}
+
+EQ_PRESET Headphones::getDisplayEqPreset() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	return this->_eqPreset.isFulfilled() ? this->_eqPreset.current : this->_eqPreset.desired;
+}
+
+bool Headphones::hasPendingEqChanges() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	return !this->_eqPreset.isFulfilled();
 }
 
 void Headphones::setTouchSensorEnabled(bool enabled)
@@ -169,9 +195,17 @@ void Headphones::applyDeviceSurroundPosition(SOUND_POSITION_PRESET preset)
 
 bool Headphones::performConnectHandshake()
 {
+	if (this->_handshakeComplete) {
+		return true;
+	}
+
 	// Sony | Sound Connect always sends CONNECT_GET_PROTOCOL_INFO first; without it
 	// many GET commands return nothing (mdr-protocol / APK: tandemfamily.message.mdr).
-	const Buffer protocolInfo = { static_cast<char>(PAYLOAD_CMD::CONNECT_GET_PROTOCOL_INFO) };
+	// Gadgetbridge init: { 0x00, 0x00 } — required before other queries respond.
+	const Buffer protocolInfo = {
+		static_cast<char>(PAYLOAD_CMD::CONNECT_GET_PROTOCOL_INFO),
+		0x00
+	};
 	std::optional<size_t> initPayloadLength;
 	if (auto payload = this->_conn.sendQuery(
 		protocolInfo,
@@ -179,6 +213,16 @@ bool Headphones::performConnectHandshake()
 		static_cast<unsigned char>(PAYLOAD_CMD::CONNECT_RET_PROTOCOL_INFO))) {
 		initPayloadLength = payload->size();
 	}
+
+	// APK 9.5: CONNECT_GET_CAPABILITY_INFO + CommonCapabilityInquiredType::FIXED_VALUE (0x00).
+	const Buffer capabilityInfo = {
+		static_cast<char>(PAYLOAD_CMD::CONNECT_GET_CAPABILITY_INFO),
+		0x00
+	};
+	this->_conn.sendQuery(
+		capabilityInfo,
+		DATA_TYPE::DATA_MDR,
+		static_cast<unsigned char>(PAYLOAD_CMD::CONNECT_RET_CAPABILITY_INFO));
 
 	this->_capabilities = buildDeviceProfile(this->_deviceName, initPayloadLength);
 	this->_deviceStatus.modelName = this->_capabilities.model == SonyHeadphoneModel::Unknown
@@ -193,14 +237,19 @@ bool Headphones::performConnectHandshake()
 		static_cast<unsigned char>(PAYLOAD_CMD::CONNECT_RET_SUPPORT_FUNCTION)
 	);
 
+	this->_handshakeComplete = true;
 	return true;
 }
 
-bool Headphones::refreshFromDevice()
+bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 {
+	if (!this->_conn.isConnected()) {
+		return false;
+	}
+
 	performConnectHandshake();
 
-	DeviceStatus nextStatus;
+	DeviceStatus nextStatus = this->_deviceStatus;
 
 	if (this->_capabilities.usesV2AmbientSound) {
 		const unsigned char variant = this->_capabilities.supportsWindNoiseMode ? 0x17 : 0x15;
@@ -215,8 +264,8 @@ bool Headphones::refreshFromDevice()
 		}
 	} else {
 		const Buffer ncQuery = {
-			static_cast<char>(PAYLOAD_CMD::NCASM_GET),
-			0x02
+			static_cast<char>(COMMAND_TYPE::NCASM_GET_PARAM),
+			static_cast<char>(NC_ASM_INQUIRED_TYPE::NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE)
 		};
 		if (auto payload = this->_conn.sendQuery(ncQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::NCASM_RET))) {
 			ProtocolParser::applyAmbientSoundControl(*this, *payload);
@@ -227,7 +276,13 @@ bool Headphones::refreshFromDevice()
 		static_cast<char>(PAYLOAD_CMD::BATTERY_REQUEST),
 		0x00
 	};
-	if (auto payload = this->_conn.sendQuery(batteryQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::BATTERY_RET))) {
+	if (auto payload = this->_conn.sendQuery(
+		batteryQuery,
+		DATA_TYPE::DATA_MDR,
+		{
+			static_cast<unsigned char>(PAYLOAD_CMD::BATTERY_RET),
+			static_cast<unsigned char>(PAYLOAD_CMD::BATTERY_NTFY)
+		})) {
 		if (auto level = ProtocolParser::parseBatteryPercent(*payload)) {
 			nextStatus.batteryPercent = *level;
 			nextStatus.hasBattery = true;
@@ -238,7 +293,13 @@ bool Headphones::refreshFromDevice()
 		static_cast<char>(PAYLOAD_CMD::AUDIO_CODEC_REQUEST),
 		0x00
 	};
-	if (auto payload = this->_conn.sendQuery(codecQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::AUDIO_CODEC_RET))) {
+	if (auto payload = this->_conn.sendQuery(
+		codecQuery,
+		DATA_TYPE::DATA_MDR,
+		{
+			static_cast<unsigned char>(PAYLOAD_CMD::AUDIO_CODEC_RET),
+			static_cast<unsigned char>(PAYLOAD_CMD::AUDIO_CODEC_NTFY)
+		})) {
 		if (auto codec = ProtocolParser::parseAudioCodec(*payload)) {
 			nextStatus.audioCodec = *codec;
 			nextStatus.hasCodec = true;
@@ -256,8 +317,18 @@ bool Headphones::refreshFromDevice()
 		}
 	}
 
+	if (!includeExtendedSettings) {
+		nextStatus.modelName = this->_deviceStatus.modelName;
+		nextStatus.protocolLabel = this->_deviceStatus.protocolLabel;
+		this->_deviceStatus = nextStatus;
+		return nextStatus.hasBattery || nextStatus.hasCodec || nextStatus.hasFirmware;
+	}
+
 	if (this->_capabilities.supportsEqualizer) {
-		const Buffer eqQuery = { static_cast<char>(PAYLOAD_CMD::EQ_GET) };
+		const Buffer eqQuery = {
+			static_cast<char>(PAYLOAD_CMD::EQ_GET),
+			0x01
+		};
 		if (auto payload = this->_conn.sendQuery(eqQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::EQ_RET))) {
 			ProtocolParser::applyEqualizer(nextStatus, *payload);
 			if (nextStatus.hasEqualizer) {
@@ -270,7 +341,7 @@ bool Headphones::refreshFromDevice()
 
 	if (this->_capabilities.supportsVirtualSound) {
 		const Buffer soundQuery = {
-			static_cast<char>(PAYLOAD_CMD::SOUND_GET),
+			static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
 			0x01
 		};
 		if (auto payload = this->_conn.sendQuery(soundQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
@@ -278,7 +349,7 @@ bool Headphones::refreshFromDevice()
 		}
 
 		const Buffer soundPosQuery = {
-			static_cast<char>(PAYLOAD_CMD::SOUND_GET),
+			static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
 			0x02
 		};
 		if (auto payload = this->_conn.sendQuery(soundPosQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
@@ -339,9 +410,9 @@ void Headphones::setChanges()
 {
 	if (!(this->_ambientSoundControl.isFulfilled() && this->_focusOnVoice.isFulfilled() && this->_asmLevel.isFulfilled()))
 	{
-		const int asmLevel = this->_ambientSoundControl.desired
-			? std::min(this->_asmLevel.desired, this->_capabilities.asmMaxLevel)
-			: 0;
+		const char asmLevel = this->_ambientSoundControl.desired
+			? static_cast<char>(std::min(this->_asmLevel.desired, this->_capabilities.asmMaxLevel))
+			: static_cast<char>(ASM_LEVEL_DISABLED);
 
 		if (this->_capabilities.usesV2AmbientSound) {
 			this->_conn.sendCommand(CommandSerializer::serializeAmbientSoundControlV2(
@@ -353,14 +424,13 @@ void Headphones::setChanges()
 		} else {
 			auto ncAsmEffect = this->_ambientSoundControl.desired ? NC_ASM_EFFECT::ADJUSTMENT_COMPLETION : NC_ASM_EFFECT::OFF;
 			auto asmId = this->_focusOnVoice.desired ? ASM_ID::VOICE : ASM_ID::NORMAL;
-			const auto asmLevelChar = static_cast<char>(asmLevel);
 
 			this->_conn.sendCommand(CommandSerializer::serializeNcAndAsmSetting(
 				ncAsmEffect,
 				NC_ASM_SETTING_TYPE::LEVEL_ADJUSTMENT,
 				ASM_SETTING_TYPE::LEVEL_ADJUSTMENT,
 				asmId,
-				asmLevelChar,
+				asmLevel,
 				this->_capabilities.asmMaxLevel
 			));
 		}
@@ -372,29 +442,21 @@ void Headphones::setChanges()
 	}
 
 	if (this->_capabilities.supportsVirtualSound && !(this->_vptType.isFulfilled() && this->_surroundPosition.isFulfilled())) {
-		VPT_INQUIRED_TYPE command;
-		unsigned char preset;
+		VPT_INQUIRED_TYPE command = VPT_INQUIRED_TYPE::VPT;
+		unsigned char preset = 0;
 
 		if (this->_vptType.desired != 0) {
 			command = VPT_INQUIRED_TYPE::VPT;
 			preset = static_cast<unsigned char>(this->_vptType.desired);
-		}
-		else if (this->_surroundPosition.desired != SOUND_POSITION_PRESET::OFF) {
+		} else if (this->_surroundPosition.desired != SOUND_POSITION_PRESET::OFF) {
 			command = VPT_INQUIRED_TYPE::SOUND_POSITION;
 			preset = static_cast<unsigned char>(this->_surroundPosition.desired);
-		}
-		else {
-			if (this->_surroundPosition.current != SOUND_POSITION_PRESET::OFF) {
-				command = VPT_INQUIRED_TYPE::SOUND_POSITION;
-				preset = static_cast<unsigned char>(SOUND_POSITION_PRESET::OFF);
-			}
-			else if (this->_vptType.current != 0) {
-				command = VPT_INQUIRED_TYPE::VPT;
-				preset = 0;
-			}
-			else {
-				throw std::logic_error("it's impossible that both values were changed to zero and were also previously zero");
-			}
+		} else if (this->_surroundPosition.current != SOUND_POSITION_PRESET::OFF) {
+			command = VPT_INQUIRED_TYPE::SOUND_POSITION;
+			preset = static_cast<unsigned char>(SOUND_POSITION_PRESET::OFF);
+		} else if (this->_vptType.current != 0) {
+			command = VPT_INQUIRED_TYPE::VPT;
+			preset = 0;
 		}
 
 		this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(command, preset));
@@ -419,8 +481,7 @@ void Headphones::setChanges()
 	if (this->_capabilities.supportsVoiceGuidance && !this->_voiceGuidanceEnabled.isFulfilled()) {
 		this->_conn.sendCommand(
 			CommandSerializer::serializeVoiceGuidance(this->_voiceGuidanceEnabled.desired),
-			DATA_TYPE::DATA_MDR_NO2
-		);
+			DATA_TYPE::DATA_MDR_NO2);
 		std::lock_guard guard(this->_propertyMtx);
 		this->_voiceGuidanceEnabled.fulfill();
 	}

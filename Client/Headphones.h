@@ -16,7 +16,7 @@ struct Property {
 	T desired;
 
 	void fulfill();
-	bool isFulfilled();
+	bool isFulfilled() const;
 };
 
 class Headphones {
@@ -33,6 +33,8 @@ public:
 	bool isSetAsmLevelAvailable();
 	void setAsmLevel(int val);
 	int getAsmLevel();
+	int getDisplayAsmLevel() const;
+	bool hasPendingAmbientChanges() const;
 
 	void setSurroundPosition(SOUND_POSITION_PRESET val);
 	SOUND_POSITION_PRESET getSurroundPosition();
@@ -42,6 +44,8 @@ public:
 
 	void setEqualizerPreset(EQ_PRESET preset);
 	EQ_PRESET getEqualizerPreset() const;
+	EQ_PRESET getDisplayEqPreset() const;
+	bool hasPendingEqChanges() const;
 
 	void setTouchSensorEnabled(bool enabled);
 	bool getTouchSensorEnabled() const;
@@ -55,7 +59,7 @@ public:
 	void configureForDevice(std::string_view deviceName);
 
 	bool performConnectHandshake();
-	bool refreshFromDevice();
+	bool refreshFromDevice(bool includeExtendedSettings = true);
 	bool isChanged();
 	void setChanges();
 
@@ -66,16 +70,17 @@ private:
 	Property<bool> _ambientSoundControl = { 0 };
 	Property<bool> _focusOnVoice = { 0 };
 	Property<int> _asmLevel = { 0 };
-	Property<SOUND_POSITION_PRESET> _surroundPosition = { SOUND_POSITION_PRESET::OUT_OF_RANGE, SOUND_POSITION_PRESET::OFF };
+	Property<SOUND_POSITION_PRESET> _surroundPosition = { SOUND_POSITION_PRESET::OFF, SOUND_POSITION_PRESET::OFF };
 	Property<int> _vptType = { 0 };
 	Property<EQ_PRESET> _eqPreset = { EQ_PRESET::OFF };
 	Property<bool> _touchSensorEnabled = { true };
 	Property<bool> _voiceGuidanceEnabled = { true };
-	std::mutex _propertyMtx;
+	mutable std::mutex _propertyMtx;
 
 	DeviceStatus _deviceStatus;
 	DeviceCapabilities _capabilities;
 	std::string _deviceName;
+	bool _handshakeComplete = false;
 	BluetoothWrapper& _conn;
 };
 
@@ -86,7 +91,7 @@ inline void Property<T>::fulfill()
 }
 
 template<class T>
-inline bool Property<T>::isFulfilled()
+inline bool Property<T>::isFulfilled() const
 {
 	return this->desired == this->current;
 }

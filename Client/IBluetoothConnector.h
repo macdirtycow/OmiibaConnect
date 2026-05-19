@@ -46,4 +46,7 @@ public:
 
 	//getConnectedDevices can block.
 	virtual std::vector<BluetoothDevice> getConnectedDevices() = 0;
+
+	virtual void discardPendingReceive() noexcept {}
+	virtual void setBlockingRecv(bool blocking) noexcept { (void)blocking; }
 };

@@ -1,6 +1,7 @@
 #include "ProtocolParser.h"
 #include "Headphones.h"
 
+#include <algorithm>
 #include <sstream>
 
 namespace ProtocolParser {
@@ -10,12 +11,15 @@ namespace ProtocolParser {
 		}
 
 		const auto batteryType = static_cast<unsigned char>(payload[1]);
+		// 0x00 = single (WH-1000XM3), 0x01/0x03 = dual L/R, 0x02 = case
 		if (batteryType == 0x00 || batteryType == 0x02) {
 			return static_cast<int>(static_cast<unsigned char>(payload[2]));
 		}
 
-		if (batteryType == 0x01 && payload.size() >= 3) {
-			return static_cast<int>(static_cast<unsigned char>(payload[2]));
+		if ((batteryType == 0x01 || batteryType == 0x03) && payload.size() >= 5) {
+			const int left = static_cast<unsigned char>(payload[2]);
+			const int right = static_cast<unsigned char>(payload[4]);
+			return std::max(left, right);
 		}
 
 		return std::nullopt;
@@ -141,7 +145,7 @@ namespace ProtocolParser {
 	}
 
 	bool applyEqualizer(DeviceStatus& status, const Buffer& payload) {
-		if (payload.size() != 10) {
+		if (payload.size() < 10) {
 			return false;
 		}
 

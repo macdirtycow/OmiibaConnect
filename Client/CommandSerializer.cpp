@@ -164,7 +164,7 @@ namespace CommandSerializer
 		}
 		if ((unsigned char)unescaped[unescaped.size() - 1] != _sumChecksum(unescaped.data(), unescaped.size() - 1))
 		{
-			throw RecoverableException("Invalid checksum!", true);
+			throw RecoverableException("Invalid checksum!", false);
 		}
 		ret.payload.assign(unescaped.begin() + 6, unescaped.begin() + 6 + dataSize);
 		return ret;

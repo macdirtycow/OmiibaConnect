@@ -1,16 +1,7 @@
 #include "MacOSBluetoothConnector.h"
+#include "../Exceptions.h"
 
-MacOSBluetoothConnector::MacOSBluetoothConnector()
-{
-    
-}
-MacOSBluetoothConnector::~MacOSBluetoothConnector()
-{
-    // onclose event
-    if (isConnected()){
-        disconnect();
-    }
-}
+#include <chrono>
 
 @interface AsyncCommDelegate : NSObject <IOBluetoothRFCOMMChannelDelegate> {
 @public
@@ -18,163 +9,376 @@ MacOSBluetoothConnector::~MacOSBluetoothConnector()
 }
 @end
 
-@implementation AsyncCommDelegate {
-}
-- (void)rfcommChannelClosed:(IOBluetoothRFCOMMChannel *)rfcommChannel{
-    delegateCPP->disconnect();
+@implementation AsyncCommDelegate
+- (void)rfcommChannelOpenComplete:(IOBluetoothRFCOMMChannel*)rfcommChannel status:(IOReturn)errorCode
+{
+    if (delegateCPP == nullptr) {
+        return;
+    }
+    delegateCPP->handleRfcommOpenComplete(rfcommChannel, errorCode);
 }
 
--(void)rfcommChannelData:(IOBluetoothRFCOMMChannel *)rfcommChannel data:(void *)dataPointer length:(size_t)dataLength
+- (void)rfcommChannelClosed:(IOBluetoothRFCOMMChannel*)rfcommChannel
 {
+    (void)rfcommChannel;
+    if (delegateCPP == nullptr) {
+        return;
+    }
+    delegateCPP->running = false;
+    delegateCPP->disconnectionConditionVariable.notify_all();
+}
+
+- (void)rfcommChannelData:(IOBluetoothRFCOMMChannel*)rfcommChannel data:(void*)dataPointer length:(size_t)dataLength
+{
+    (void)rfcommChannel;
+    if (delegateCPP == nullptr) {
+        return;
+    }
+
     std::lock_guard<std::mutex> g(delegateCPP->receiveDataMutex);
-    
-    unsigned char* buffer = (unsigned char*)dataPointer;
-    std::vector<unsigned char> vectorBuffer(buffer, buffer+dataLength);
-    
-    delegateCPP->receivedBytes.push_back(vectorBuffer);
+
+    const auto* buffer = static_cast<const unsigned char*>(dataPointer);
+    std::vector<unsigned char> vectorBuffer(buffer, buffer + dataLength);
+
+    delegateCPP->receivedBytes.push_back(std::move(vectorBuffer));
     delegateCPP->receiveDataConditionVariable.notify_one();
 }
-
-
 @end
+
+MacOSBluetoothConnector::MacOSBluetoothConnector() = default;
+
+MacOSBluetoothConnector::~MacOSBluetoothConnector()
+{
+    disconnect();
+}
+
+bool MacOSBluetoothConnector::tryFinishConnectOnce() noexcept
+{
+    bool expected = false;
+    if (!_connectFinished.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+    finishConnectSuccess();
+    return true;
+}
+
+void MacOSBluetoothConnector::finishConnectSuccess() noexcept
+{
+    std::lock_guard<std::mutex> lk(_connectPromiseMtx);
+    if (!_connectPromise) {
+        return;
+    }
+    try {
+        _connectPromise->set_value();
+    } catch (...) {
+    }
+    _connectPromise.reset();
+}
+
+void MacOSBluetoothConnector::finishConnectFailure(const char* message) noexcept
+{
+    bool expected = false;
+    if (!_connectFinished.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lk(_connectPromiseMtx);
+    if (!_connectPromise) {
+        return;
+    }
+    try {
+        const RecoverableException exc(message, false);
+        _connectPromise->set_exception(std::make_exception_ptr(exc));
+    } catch (...) {
+    }
+    _connectPromise.reset();
+}
+
+void MacOSBluetoothConnector::handleRfcommOpenComplete(IOBluetoothRFCOMMChannel* channel, IOReturn status) noexcept
+{
+    if (_connectFinished.load()) {
+        return;
+    }
+    if (status != kIOReturnSuccess) {
+        finishConnectFailure("Could not open RFCOMM connection to headphones.");
+        return;
+    }
+    if (channel == nil || !channel.isOpen) {
+        return;
+    }
+
+    rfcommchannel = (__bridge void*)channel;
+    running = true;
+    tryFinishConnectOnce();
+}
+
+void MacOSBluetoothConnector::discardPendingReceive() noexcept
+{
+    std::lock_guard<std::mutex> g(receiveDataMutex);
+    receivedBytes.clear();
+}
+
+void MacOSBluetoothConnector::setBlockingRecv(bool blocking) noexcept
+{
+    _blockingRecv.store(blocking);
+}
 
 int MacOSBluetoothConnector::send(char* buf, size_t length)
 {
-    [(__bridge IOBluetoothRFCOMMChannel*)rfcommchannel writeSync:(void*)buf length:length];
-    return (int)length;
+    auto* chan = (__bridge IOBluetoothRFCOMMChannel*)rfcommchannel;
+    if (chan == nil || !chan.isOpen) {
+        return 0;
+    }
+    const IOReturn result = [chan writeSync:buf length:length];
+    if (result != kIOReturnSuccess) {
+        return 0;
+    }
+    return static_cast<int>(length);
 }
 
-
-void MacOSBluetoothConnector::connectToMac(MacOSBluetoothConnector* macOSBluetoothConnector, std::promise<void> connectPromise)
+void MacOSBluetoothConnector::connectToMac(MacOSBluetoothConnector* connector) noexcept
 {
-    // get device
-    IOBluetoothDevice *device = (__bridge IOBluetoothDevice *)macOSBluetoothConnector->rfcommDevice;
-    // create new channel
-    IOBluetoothRFCOMMChannel *channel = [[IOBluetoothRFCOMMChannel alloc] init];
-    // create sppServiceid
-    IOBluetoothSDPUUID *sppServiceUUID = [IOBluetoothSDPUUID uuidWithBytes:(void*)SERVICE_UUID_IN_BYTES length: 16];
-    // get sppServiceRecord
-    IOBluetoothSDPServiceRecord *sppServiceRecord = [device getServiceRecordForUUID:sppServiceUUID];
-    // get rfcommChannelID from sppServiceRecord
-    UInt8 rfcommChannelID;
-    [sppServiceRecord getRFCOMMChannelID:&rfcommChannelID];
-    // setup delegate
-    AsyncCommDelegate* asyncCommDelegate = [[AsyncCommDelegate alloc] init];
-    asyncCommDelegate->delegateCPP = macOSBluetoothConnector;
-    // try to open channel
-    if ( [device openRFCOMMChannelAsync:&channel withChannelID:rfcommChannelID delegate:asyncCommDelegate] != kIOReturnSuccess ) {
-        RecoverableException exc = RecoverableException("Could not open the rfcomm.", false);
-        std::exception_ptr excPtr = std::make_exception_ptr(exc);
-        connectPromise.set_exception(excPtr);
-        return;
+    IOBluetoothRFCOMMChannel* channel = nil;
+
+    try {
+        IOBluetoothDevice* device = (__bridge IOBluetoothDevice*)connector->rfcommDevice;
+        channel = [[IOBluetoothRFCOMMChannel alloc] init];
+
+        IOBluetoothSDPUUID* sppServiceUUID = [IOBluetoothSDPUUID uuidWithBytes:(void*)SERVICE_UUID_IN_BYTES length:16];
+        IOBluetoothSDPServiceRecord* sppServiceRecord = [device getServiceRecordForUUID:sppServiceUUID];
+
+        if (sppServiceRecord == nil) {
+            connector->finishConnectFailure(
+                "Sony headset service not found. Connect the headphones in System Settings first.");
+            return;
+        }
+
+        UInt8 rfcommChannelID = 0;
+        if ([sppServiceRecord getRFCOMMChannelID:&rfcommChannelID] != kIOReturnSuccess) {
+            connector->finishConnectFailure("Could not find the Sony headset Bluetooth channel.");
+            return;
+        }
+
+        AsyncCommDelegate* asyncCommDelegate = [[AsyncCommDelegate alloc] init];
+        asyncCommDelegate->delegateCPP = connector;
+        connector->commDelegate = (__bridge_retained void*)asyncCommDelegate;
+
+        if ([device openRFCOMMChannelAsync:&channel withChannelID:rfcommChannelID delegate:asyncCommDelegate]
+            != kIOReturnSuccess) {
+            connector->finishConnectFailure("Could not open RFCOMM connection to headphones.");
+            return;
+        }
+
+        connector->rfcommchannel = (__bridge void*)channel;
+        connector->running = true;
+
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(18);
+        while (!connector->_connectFinished.load() && std::chrono::steady_clock::now() < deadline) {
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+            if (channel != nil && channel.isOpen) {
+                connector->tryFinishConnectOnce();
+                break;
+            }
+        }
+
+        if (!connector->_connectFinished.load()) {
+            connector->finishConnectFailure(
+                "Could not open RFCOMM connection to headphones. Try disconnecting in System Settings and reconnecting.");
+            connector->running = false;
+            return;
+        }
+
+        std::unique_lock<std::mutex> lk(connector->disconnectionMutex);
+        while (connector->running.load()) {
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+
+            connector->disconnectionConditionVariable.wait_for(
+                lk, std::chrono::milliseconds(1000),
+                [&]() { return !connector->running.load(); });
+        }
+    } catch (...) {
+        connector->finishConnectFailure("Unexpected error while connecting to headphones.");
     }
-    // store the channel
-    macOSBluetoothConnector->rfcommchannel = (__bridge void*) channel;
-    
-    macOSBluetoothConnector->running = true;
-    
-    // tell the other tread that we are done connecting
-    connectPromise.set_value();
-
-    // keep thread running, until we are disconnected
-    std::unique_lock<std::mutex> lk(macOSBluetoothConnector->disconnectionMutex);
-    while (macOSBluetoothConnector->running) {
-        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.1]];
-
-        macOSBluetoothConnector->disconnectionConditionVariable.wait_for(
-            lk, std::chrono::milliseconds(1000),
-            [&]() { return !macOSBluetoothConnector->running; });
-    }
-
-    lk.unlock();
 }
-void MacOSBluetoothConnector::connect(const std::string& addrStr){
-    // convert mac address to nsstring
-    NSString *addressNSString = [NSString stringWithCString:addrStr.c_str() encoding:[NSString defaultCStringEncoding]];
-    // get device based on mac address
-    IOBluetoothDevice *device = [IOBluetoothDevice deviceWithAddressString:addressNSString];
-    // if device is not connected
-    if (![device isConnected]) {
-        [device openConnection];
-    }
-    std::promise<void> connectPromise;
-    std::future<void> connectFuture = connectPromise.get_future();
 
-    // store the device in a variable
-    rfcommDevice = (__bridge void*) device;
-    uthread = std::thread(MacOSBluetoothConnector::connectToMac, this, std::move(connectPromise));
-    
-    // wait till the device is connected
-    connectFuture.get();
+void MacOSBluetoothConnector::connect(const std::string& addrStr)
+{
+    if (uthread.joinable()) {
+        disconnect();
+    }
+
+    running = false;
+    rfcommchannel = nullptr;
+    _connectFinished = false;
+
+    NSString* addressNSString = [NSString stringWithUTF8String:addrStr.c_str()];
+    IOBluetoothDevice* device = [IOBluetoothDevice deviceWithAddressString:addressNSString];
+    if (device == nil) {
+        throw RecoverableException("Bluetooth device not found.", false);
+    }
+
+    if (![device isConnected]) {
+        if ([device openConnection] != kIOReturnSuccess) {
+            throw RecoverableException(
+                "Could not open Bluetooth. Connect the headphones in System Settings first.",
+                false);
+        }
+    }
+
+    std::future<void> connectFuture;
+    {
+        std::lock_guard<std::mutex> lk(_connectPromiseMtx);
+        _connectPromise = std::make_unique<std::promise<void>>();
+        connectFuture = _connectPromise->get_future();
+    }
+
+    rfcommDevice = (__bridge void*)device;
+    uthread = std::thread(MacOSBluetoothConnector::connectToMac, this);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (connectFuture.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            running = false;
+            disconnectionConditionVariable.notify_all();
+            {
+                std::lock_guard<std::mutex> lk(_connectPromiseMtx);
+                _connectPromise.reset();
+            }
+            _connectFinished = true;
+            if (rfcommchannel != nullptr) {
+                IOBluetoothRFCOMMChannel* chan = (__bridge IOBluetoothRFCOMMChannel*)rfcommchannel;
+                [chan setDelegate:nil];
+                if (chan.isOpen) {
+                    [chan closeChannel];
+                }
+                rfcommchannel = nullptr;
+            }
+            if (uthread.joinable()) {
+                uthread.join();
+            }
+            throw RecoverableException("Connection timed out.", false);
+        }
+
+        // IOBluetooth may deliver delegate callbacks on the main run loop.
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    }
+
+    try {
+        connectFuture.get();
+    } catch (const std::exception& exc) {
+        running = false;
+        disconnectionConditionVariable.notify_all();
+        if (uthread.joinable()) {
+            uthread.join();
+        }
+        throw RecoverableException(exc.what(), false);
+    }
+
+    discardPendingReceive();
 }
 
 int MacOSBluetoothConnector::recv(char* buf, size_t length)
 {
-    // wait for newly received data
     std::unique_lock<std::mutex> g(receiveDataMutex);
-    receiveDataConditionVariable.wait(g, [this]{ return !receivedBytes.empty(); });
-    
-    // fill the buf with the new data
-    std::vector<unsigned char> receivedVector = receivedBytes.front();
-    receivedBytes.pop_front();
-    
-    size_t lengthCopied = std::min(length, receivedVector.size());
-
-    // copy the first amount of bytes
-    std::memcpy(buf, receivedVector.data(), lengthCopied);
-    
-    // too much data, save it for next time
-    if (receivedVector.size() > length){
-        receivedVector.erase(receivedVector.begin(), receivedVector.begin() + lengthCopied);
-        receivedBytes.push_front(receivedVector);
+    const auto recvTimeout = _blockingRecv.load()
+        ? std::chrono::milliseconds(12000)
+        : std::chrono::milliseconds(3000);
+    const bool gotData = receiveDataConditionVariable.wait_for(
+        g,
+        recvTimeout,
+        [this] { return !receivedBytes.empty(); });
+    if (!gotData || receivedBytes.empty()) {
+        return 0;
     }
-    
-    return (int)lengthCopied;
+
+    std::vector<unsigned char> receivedVector = std::move(receivedBytes.front());
+    receivedBytes.pop_front();
+
+    const size_t lengthCopied = std::min(length, receivedVector.size());
+    std::memcpy(buf, receivedVector.data(), lengthCopied);
+
+    if (receivedVector.size() > lengthCopied) {
+        receivedVector.erase(receivedVector.begin(), receivedVector.begin() + static_cast<long>(lengthCopied));
+        receivedBytes.push_front(std::move(receivedVector));
+    }
+
+    return static_cast<int>(lengthCopied);
 }
 
 std::vector<BluetoothDevice> MacOSBluetoothConnector::getConnectedDevices()
 {
-    // create the output vector
     std::vector<BluetoothDevice> res;
-    // loop through the paired devices (also includes non paired devices for some reason)
     for (IOBluetoothDevice* device in [IOBluetoothDevice pairedDevices]) {
-        // check if device is connected
         if ([device isConnected]) {
             BluetoothDevice dev;
-            // save the mac address and name
             dev.mac = [[device addressString] UTF8String];
             dev.name = [[device name] UTF8String];
-            // add device to the connected devices vector
             res.push_back(dev);
         }
     }
-    
     return res;
 }
 
 void MacOSBluetoothConnector::disconnect() noexcept
 {
-    // close connection
-    closeConnection();
+    const bool onWorkerThread = uthread.joinable() && std::this_thread::get_id() == uthread.get_id();
+
     running = false;
-    // notify the other thread that we are done disconnecting
+    _connectFinished = true;
+
+    {
+        std::lock_guard<std::mutex> lk(_connectPromiseMtx);
+        _connectPromise.reset();
+    }
+
+    if (rfcommchannel != nullptr) {
+        IOBluetoothRFCOMMChannel* chan = (__bridge IOBluetoothRFCOMMChannel*)rfcommchannel;
+        [chan setDelegate:nil];
+        if (chan.isOpen) {
+            [chan closeChannel];
+        }
+        rfcommchannel = nullptr;
+    }
+
+    if (commDelegate != nullptr) {
+        AsyncCommDelegate* delegate = (__bridge_transfer AsyncCommDelegate*)commDelegate;
+        delegate->delegateCPP = nullptr;
+        commDelegate = nullptr;
+        (void)delegate;
+    }
+
     disconnectionConditionVariable.notify_all();
-    // wait for the thread to finish
-    uthread.join();
-}
-void MacOSBluetoothConnector::closeConnection() {
-    // get the channel
-    IOBluetoothRFCOMMChannel *chan = (__bridge IOBluetoothRFCOMMChannel*) rfcommchannel;
-    [chan setDelegate: nil];
-    // close the channel
-    [chan closeChannel];
+
+    if (!onWorkerThread && uthread.joinable()) {
+        uthread.join();
+    }
+
+    rfcommDevice = nullptr;
+    discardPendingReceive();
 }
 
+void MacOSBluetoothConnector::closeConnection()
+{
+    if (rfcommchannel == nullptr) {
+        return;
+    }
+
+    IOBluetoothRFCOMMChannel* chan = (__bridge IOBluetoothRFCOMMChannel*)rfcommchannel;
+    [chan setDelegate:nil];
+    if (chan.isOpen) {
+        [chan closeChannel];
+    }
+    rfcommchannel = nullptr;
+}
 
 bool MacOSBluetoothConnector::isConnected() noexcept
 {
-    if (!running)
+    if (!running.load()) {
         return false;
-    IOBluetoothRFCOMMChannel *chan = (__bridge IOBluetoothRFCOMMChannel*) rfcommchannel;
+    }
+    if (rfcommchannel == nullptr) {
+        return false;
+    }
+    IOBluetoothRFCOMMChannel* chan = (__bridge IOBluetoothRFCOMMChannel*)rfcommchannel;
     return chan.isOpen;
 }
