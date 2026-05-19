@@ -11,7 +11,16 @@ Unofficial macOS companion for **Sony WH-1000XM3 / XM4 / XM5 / XM6**, based on [
 
 ## Download
 
-Get the latest **OmiibaConnect.app** from [Releases](https://github.com/macdirtycow/OmiibaConnect/releases/latest). Unzip, then open the app. If macOS blocks it, right-click → Open once, or run `xattr -cr OmiibaConnect.app` in Terminal.
+Get the latest **macOS installer** (`.pkg`) from [Releases](https://github.com/macdirtycow/OmiibaConnect/releases/latest). Double-click it and follow the steps — Omiiba Connect is installed in **Applications**.
+
+If macOS blocks the app the first time: right-click **Omiiba Connect** in Applications → **Open**.
+
+To build the installer yourself:
+
+```bash
+chmod +x scripts/package-installer.sh
+./scripts/package-installer.sh
+```
 
 ## Support
 
