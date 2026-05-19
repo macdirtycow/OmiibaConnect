@@ -22,15 +22,38 @@ BluetoothWrapper& BluetoothWrapper::operator=(BluetoothWrapper&& other) noexcept
 	return *this;
 }
 
-int BluetoothWrapper::sendCommand(const std::vector<char>& bytes)
+int BluetoothWrapper::sendCommand(const std::vector<char>& bytes, DATA_TYPE dataType)
 {
 	std::lock_guard guard(this->_connectorMtx);
-	auto data = CommandSerializer::packageDataForBt(bytes, DATA_TYPE::DATA_MDR, this->_seqNumber++);
+	auto data = CommandSerializer::packageDataForBt(bytes, dataType, this->_seqNumber++);
 	auto bytesSent = this->_connector->send(data.data(), data.size());
 
 	this->_waitForAck();
 
 	return bytesSent;
+}
+
+std::optional<Buffer> BluetoothWrapper::sendQuery(
+	const Buffer& payloadBytes,
+	DATA_TYPE dataType,
+	unsigned char expectedRetCode,
+	int maxMessages)
+{
+	std::lock_guard guard(this->_connectorMtx);
+	auto data = CommandSerializer::packageDataForBt(payloadBytes, dataType, this->_seqNumber++);
+	this->_connector->send(data.data(), data.size());
+
+	for (int i = 0; i < maxMessages; i++) {
+		auto msg = this->_recvFramedMessage();
+		if (msg.dataType == DATA_TYPE::ACK) {
+			continue;
+		}
+		if (msg.dataType == dataType && !msg.payload.empty() && static_cast<unsigned char>(msg.payload[0]) == expectedRetCode) {
+			return msg.payload;
+		}
+	}
+
+	return std::nullopt;
 }
 
 bool BluetoothWrapper::isConnected() noexcept
@@ -57,7 +80,7 @@ std::vector<BluetoothDevice> BluetoothWrapper::getConnectedDevices()
 	return this->_connector->getConnectedDevices();
 }
 
-void BluetoothWrapper::_waitForAck()
+CommandSerializer::Message BluetoothWrapper::_recvFramedMessage()
 {
 	bool ongoingMessage = false;
 	bool messageFinished = false;
@@ -94,5 +117,16 @@ void BluetoothWrapper::_waitForAck()
 
 	auto msg = CommandSerializer::unpackBtMessage(msgBytes);
 	this->_seqNumber = msg.seqNumber;
+	return msg;
 }
 
+void BluetoothWrapper::_waitForAck()
+{
+	for (int i = 0; i < 8; i++) {
+		auto msg = this->_recvFramedMessage();
+		if (msg.dataType == DATA_TYPE::ACK) {
+			return;
+		}
+	}
+	throw RecoverableException("Did not receive ACK from headphones", true);
+}

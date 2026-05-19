@@ -15,8 +15,7 @@ namespace CommandSerializer
 	{
 		DATA_TYPE dataType;
 		unsigned char seqNumber;
-		//Not really needed for now
-		//Buffer messageBytes;
+		Buffer payload;
 	};
 
 	//escape special chars
@@ -41,5 +40,9 @@ namespace CommandSerializer
 	NC_DUAL_SINGLE_VALUE getDualSingleForAsmLevel(char asmLevel);
 	Buffer serializeNcAndAsmSetting(NC_ASM_EFFECT ncAsmEffect, NC_ASM_SETTING_TYPE ncAsmSettingType, ASM_SETTING_TYPE asmSettingType, ASM_ID asmId, char asmLevel);
 	Buffer serializeVPTSetting(VPT_INQUIRED_TYPE type, unsigned char preset);
+	Buffer serializePayload(const Buffer& payloadBytes);
+	Buffer serializeEqualizerPreset(EQ_PRESET preset);
+	Buffer serializeTouchSensor(bool enabled);
+	Buffer serializeVoiceGuidance(bool enabled);
 }
 

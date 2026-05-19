@@ -1,8 +1,6 @@
 //
 //  ViewController.h
-//  SonyHeadphonesClient
-//
-//  Created by Sem Visscher on 01/12/2020.
+//  Omiiba Connect
 //
 
 #import <Cocoa/Cocoa.h>
@@ -25,5 +23,16 @@ NSStatusItem* statusItem;
 @property (weak, nonatomic) IBOutlet NSTextField *surroundLabel;
 @property (weak, nonatomic) IBOutlet NSPopUpButton *soundPosition;
 @property (weak, nonatomic) IBOutlet NSPopUpButton *surround;
-@end
 
+@property (strong, nonatomic) NSTextField *batteryLabel;
+@property (strong, nonatomic) NSTextField *codecLabel;
+@property (strong, nonatomic) NSTextField *firmwareLabel;
+@property (strong, nonatomic) NSPopUpButton *eqPopup;
+@property (strong, nonatomic) NSButton *touchSensorCheckbox;
+@property (strong, nonatomic) NSButton *voiceGuidanceCheckbox;
+@property (strong, nonatomic) NSButton *refreshButton;
+@property (strong, nonatomic) NSLevelIndicator *batteryIndicator;
+@property (strong, nonatomic) NSView *connectionIndicator;
+@property (strong, nonatomic) NSProgressIndicator *refreshSpinner;
+@property (strong, nonatomic) NSScrollView *scrollView;
+@end

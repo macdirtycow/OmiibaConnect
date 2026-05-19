@@ -3,13 +3,19 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>
-	<string>SonyHeadphonesClient</string>
+	<string>OmiibaConnect</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.semvis123.SonyHeadphonesClient</string>
+	<string>dev.omiiba.connect</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>SonyHeadphonesClient</string>
+	<string>Omiiba Connect</string>
+	<key>CFBundleDisplayName</key>
+	<string>Omiiba Connect</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>2</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSApplicationCategoryType</key>

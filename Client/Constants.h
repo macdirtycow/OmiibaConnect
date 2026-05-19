@@ -14,7 +14,7 @@ inline unsigned char SERVICE_UUID_IN_BYTES[] = { // this is the SERVICE_UUID but
 	0xb3, 0x2d, 0xe3, 0x16, 0xf5, 0xe0, 0x69, 0xba
 };
 
-#define APP_NAME "Sony Headphones App v" __HEADPHONES_APP_VERSION__
+#define APP_NAME "Omiiba Connect v" __HEADPHONES_APP_VERSION__
 #define APP_NAME_W (L"" APP_NAME)
 
 using Buffer = std::vector<char>;
@@ -85,8 +85,103 @@ enum class NC_DUAL_SINGLE_VALUE : signed char
 
 enum class COMMAND_TYPE : signed char
 {
+	VPT_GET_PARAM = 70,
 	VPT_SET_PARAM = 72,
+	NCASM_GET_PARAM = 102,
 	NCASM_SET_PARAM = 104
+};
+
+// Sony MDR v1 payload command bytes — from Sony APK (com.sony.songpal.mdr) via
+// com.sony.songpal.tandemfamily.message.mdr and community docs (mdr-protocol, Gadgetbridge).
+enum class PAYLOAD_CMD : unsigned char
+{
+	// CONNECT category — must be sent before other queries (Sony app always starts here).
+	CONNECT_GET_PROTOCOL_INFO = 0x00,
+	CONNECT_RET_PROTOCOL_INFO = 0x01,
+	CONNECT_GET_DEVICE_INFO = 0x04,
+	CONNECT_RET_DEVICE_INFO = 0x05,
+	CONNECT_GET_SUPPORT_FUNCTION = 0x06,
+	CONNECT_RET_SUPPORT_FUNCTION = 0x07,
+
+	BATTERY_REQUEST = 0x10,
+	BATTERY_RET = 0x11,
+	AUDIO_CODEC_REQUEST = 0x18,
+	AUDIO_CODEC_RET = 0x19,
+	// Alias: device info uses CONNECT_GET_DEVICE_INFO + DeviceInfoInquiredType
+	FW_VERSION_REQUEST = CONNECT_GET_DEVICE_INFO,
+	FW_VERSION_RET = CONNECT_RET_DEVICE_INFO,
+	SOUND_GET = 0x46,
+	SOUND_RET = 0x47,
+	SOUND_SET = 0x48,
+	EQ_GET = 0x56,
+	EQ_RET = 0x57,
+	EQ_SET = 0x58,
+	NCASM_GET = 0x66,
+	NCASM_RET = 0x67,
+	NCASM_SET = 0x68,
+	TOUCH_GET = 0xd6,
+	TOUCH_RET = 0xd7,
+	TOUCH_SET = 0xd8,
+	VOICE_GET = 0x46,
+	VOICE_RET = 0x47,
+	VOICE_SET = 0x48,
+
+	// OPT — NC optimizer (APK: OPT_SET_STATUS)
+	NC_OPTIMIZER_SET = 0x84,
+	NC_OPTIMIZER_NTFY = 0x85,
+
+	// AUDIO — DSEE HX / upsampling (APK: AUDIO_GET_PARAM)
+	AUDIO_UPSAMPLING_GET = 0xe6,
+	AUDIO_UPSAMPLING_RET = 0xe7,
+	AUDIO_UPSAMPLING_SET = 0xe8,
+
+	// SYSTEM — auto power-off, button modes (APK: SYSTEM_GET_PARAM)
+	SYSTEM_GET_PARAM = 0xf6,
+	SYSTEM_RET_PARAM = 0xf7,
+	SYSTEM_SET_PARAM = 0xf8,
+};
+
+// CONNECT_GET_DEVICE_INFO sub-types (DeviceInfoInquiredType in APK enums).
+enum class DEVICE_INFO_TYPE : unsigned char
+{
+	MODEL_NAME = 0x01,
+	FW_VERSION = 0x02,
+	SERIES_AND_COLOR = 0x03,
+};
+
+// GENERAL_SETTING_GET_PARAM sub-type (GsInquiredType in APK).
+enum class GS_INQUIRED_TYPE : signed char
+{
+	GENERAL_SETTING1 = static_cast<signed char>(0xD1),
+	GENERAL_SETTING2 = static_cast<signed char>(0xD2),
+	GENERAL_SETTING3 = static_cast<signed char>(0xD3),
+};
+
+// table2 voice guidance (Command.java v1/table2).
+enum class VOICE_GUIDANCE_CMD : unsigned char
+{
+	GET_PARAM = 0x46,
+	RET_PARAM = 0x47,
+	SET_PARAM = 0x48,
+};
+
+enum class VOICE_GUIDANCE_INQUIRED : unsigned char
+{
+	VOICE_GUIDANCE_SETTING = 0x01,
+};
+
+enum class EQ_PRESET : unsigned char
+{
+	OFF = 0x00,
+	BRIGHT = 0x10,
+	EXCITED = 0x11,
+	MELLOW = 0x12,
+	RELAXED = 0x13,
+	VOCAL = 0x14,
+	TREBLE_BOOST = 0x15,
+	BASS_BOOST = 0x16,
+	SPEECH = 0x17,
+	MANUAL = 0xa0,
 };
 
 enum class VPT_PRESET_ID : signed char
