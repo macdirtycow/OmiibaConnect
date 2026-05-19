@@ -4,7 +4,20 @@ Unofficial macOS companion for **Sony WH-1000XM3**, based on [Plutoberth/SonyHea
 
 **Repository:** https://github.com/macdirtycow/OmiibaConnect
 
+[![Download latest release](https://img.shields.io/github/v/release/macdirtycow/OmiibaConnect?label=Download)](https://github.com/macdirtycow/OmiibaConnect/releases/latest)
+[![Donate](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://paypal.me/macdirtycow)
+
 **This app is not affiliated with Sony.**
+
+## Download
+
+Get the latest **OmiibaConnect.app** from [Releases](https://github.com/macdirtycow/OmiibaConnect/releases/latest). Unzip, then open the app. If macOS blocks it, right-click → Open once, or run `xattr -cr OmiibaConnect.app` in Terminal.
+
+## Support
+
+If Omiiba Connect is useful to you, consider a donation:
+
+**[paypal.me/macdirtycow](https://paypal.me/macdirtycow)**
 
 ## Disclaimer
 
