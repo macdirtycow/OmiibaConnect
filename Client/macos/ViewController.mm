@@ -146,6 +146,55 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     [self buildExtendedControls];
     [self setupModernLayout];
     [self updateManualEqPanelVisibility];
+
+    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    [center addObserver:self
+               selector:@selector(handleAppDidBecomeActive:)
+                   name:NSApplicationDidBecomeActiveNotification
+                 object:nil];
+    [center addObserver:self
+               selector:@selector(handleWorkspaceDidWake:)
+                   name:NSWorkspaceDidWakeNotification
+                 object:nil];
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+- (void)handleAppDidBecomeActive:(NSNotification*)notification {
+    (void)notification;
+    [self revalidateBluetoothSession];
+}
+
+- (void)handleWorkspaceDidWake:(NSNotification*)notification {
+    (void)notification;
+    [self revalidateBluetoothSession];
+}
+
+- (void)revalidateBluetoothSession {
+    dispatch_async(_bluetoothQueue, ^{
+        if (!bt.isConnected() || headphones == nullptr) {
+            return;
+        }
+
+        bt.serviceTransport();
+
+        if (headphones->probeConnection()) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self enableInteractiveControlsIfConnected];
+            });
+            return;
+        }
+
+        bt.disconnect();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self displayDisconnectedWithText:@"Connection lost — tap Connect"];
+            [self.connectButton setTitle:@"Connect"];
+            [self setConnectionIndicatorConnected:NO];
+            [self setExtendedControlsEnabled:NO];
+        });
+    });
 }
 
 - (void)buildManualEqPanel {
@@ -282,13 +331,24 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
         [slider setAction:nil];
     }
 
-    [_eqSliders[0] setIntValue:bass];
-    for (int i = 0; i < EQ_BAND_COUNT; i++) {
-        [_eqSliders[i + 1] setIntValue:bands[i]];
-    }
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext* context) {
+        context.duration = 0;
+        if (_eqSliders[0].intValue != bass) {
+            [_eqSliders[0] setIntValue:bass];
+        }
+        for (int i = 0; i < EQ_BAND_COUNT; i++) {
+            if (_eqSliders[i + 1].intValue != bands[i]) {
+                [_eqSliders[i + 1] setIntValue:bands[i]];
+            }
+        }
+    } completionHandler:nil];
 
     for (NSInteger i = 0; i < _eqValueLabels.count; i++) {
-        [_eqValueLabels[i] setStringValue:[NSString stringWithFormat:@"%d", _eqSliders[i].intValue]];
+        const int value = _eqSliders[i].intValue;
+        NSString* text = [NSString stringWithFormat:@"%d", value];
+        if (![_eqValueLabels[i].stringValue isEqualToString:text]) {
+            [_eqValueLabels[i] setStringValue:text];
+        }
     }
 
     for (NSSlider* slider in _eqSliders) {
@@ -975,9 +1035,6 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
                     return;
                 }
                 [self updateGUI];
-                if (fullRefresh && [self isManualEqSelected] && ![self shouldHoldManualEqSliderUi]) {
-                    [self syncManualEqSlidersFromHeadphones];
-                }
                 [self finishRefreshGeneration:generation];
             });
         } catch (RecoverableException& exc) {

@@ -15,9 +15,9 @@
 	<key>CFBundleGetInfoString</key>
 	<string>Omiiba Connect — Sony Headphones macOS Client</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.3.22</string>
+	<string>2.3.24</string>
 	<key>CFBundleVersion</key>
-	<string>30</string>
+	<string>32</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>LSApplicationCategoryType</key>
@@ -26,6 +26,8 @@
 	<string>True</string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>This app uses Bluetooth in order to connect to your headphones.</string>
+	<key>NSAppSleepDisabled</key>
+	<true/>
 	<key>NSMainStoryboardFile</key>
 	<string>Main</string>
 	<key>NSPrincipalClass</key>

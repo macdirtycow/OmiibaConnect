@@ -66,6 +66,8 @@ public:
 	void configureForDevice(std::string_view deviceName);
 
 	bool performConnectHandshake();
+	/** Lightweight round-trip; false means the RFCOMM link is stale. */
+	bool probeConnection();
 	bool refreshFromDevice(bool includeExtendedSettings = true);
 	bool isChanged();
 	bool hasAnyPendingChanges() const;

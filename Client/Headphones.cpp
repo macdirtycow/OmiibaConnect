@@ -160,6 +160,13 @@ bool Headphones::hasPendingEqChanges() const
 int Headphones::getDisplayEqBass() const
 {
 	std::lock_guard guard(this->_propertyMtx);
+	const EQ_PRESET displayPreset = this->_eqPreset.isFulfilled()
+		? this->_eqPreset.current
+		: this->_eqPreset.desired;
+	// Manual UI always follows desired — device EQ_GET can briefly report 0 for mid bands.
+	if (displayPreset == EQ_PRESET::MANUAL) {
+		return this->_eqBass.desired;
+	}
 	if (this->_eqUseBandPayload) {
 		return this->_eqBass.isFulfilled() ? this->_eqBass.current : this->_eqBass.desired;
 	}
@@ -169,6 +176,12 @@ int Headphones::getDisplayEqBass() const
 std::array<int, EQ_BAND_COUNT> Headphones::getDisplayEqBands() const
 {
 	std::lock_guard guard(this->_propertyMtx);
+	const EQ_PRESET displayPreset = this->_eqPreset.isFulfilled()
+		? this->_eqPreset.current
+		: this->_eqPreset.desired;
+	if (displayPreset == EQ_PRESET::MANUAL) {
+		return this->_eqBands.desired;
+	}
 	if (this->_eqUseBandPayload) {
 		return this->_eqBands.isFulfilled() ? this->_eqBands.current : this->_eqBands.desired;
 	}
@@ -388,6 +401,27 @@ bool Headphones::performConnectHandshake()
 	return true;
 }
 
+bool Headphones::probeConnection()
+{
+	if (!this->_conn.isConnected()) {
+		return false;
+	}
+
+	const Buffer batteryQuery = {
+		static_cast<char>(PAYLOAD_CMD::BATTERY_REQUEST),
+		0x00
+	};
+	const auto payload = this->_conn.sendQuery(
+		batteryQuery,
+		DATA_TYPE::DATA_MDR,
+		{
+			static_cast<unsigned char>(PAYLOAD_CMD::BATTERY_RET),
+			static_cast<unsigned char>(PAYLOAD_CMD::BATTERY_NTFY)
+		},
+		8);
+	return payload.has_value();
+}
+
 bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 {
 	if (!this->_conn.isConnected()) {
@@ -577,9 +611,14 @@ void Headphones::updateEqCurrentFromDevice()
 	if (auto payload = this->_conn.sendQuery(eqQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::EQ_RET))) {
 		if (ProtocolParser::applyEqualizer(status, *payload) && status.hasEqualizer) {
 			std::lock_guard guard(this->_propertyMtx);
+			const bool keepManualBands = this->_eqPreset.desired == EQ_PRESET::MANUAL
+				&& this->_eqUseBandPayload
+				&& this->_eqBands.isFulfilled();
 			this->_eqPreset.current = static_cast<EQ_PRESET>(status.eqPresetCode);
-			this->_eqBass.current = status.eqBass;
-			this->_eqBands.current = status.eqBands;
+			if (!keepManualBands) {
+				this->_eqBass.current = status.eqBass;
+				this->_eqBands.current = status.eqBands;
+			}
 			this->_deviceStatus.eqBass = status.eqBass;
 			this->_deviceStatus.eqBands = status.eqBands;
 			this->_deviceStatus.eqPresetCode = status.eqPresetCode;
@@ -626,7 +665,7 @@ void Headphones::sendEqChanges()
 			this->_eqBass.fulfill();
 			this->_eqBands.fulfill();
 		}
-		this->updateEqCurrentFromDevice();
+		// Do not EQ_GET immediately after band write — XM3 read-back often zeros mid bands and flickers the UI.
 	} else {
 		this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(preset));
 		this->updateEqCurrentFromDevice();

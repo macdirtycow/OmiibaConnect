@@ -23,6 +23,7 @@ public:
     virtual int send(char* buf, size_t length) noexcept(false);
     virtual int recv(char* buf, size_t length) noexcept(false);
     virtual void disconnect() noexcept;
+    virtual void serviceTransport() noexcept override;
     virtual bool isConnected() noexcept;
     virtual void closeConnection();
 

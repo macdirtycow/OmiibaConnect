@@ -9,13 +9,33 @@ INSTALL_PATH="/Applications/OmiibaConnect.app"
 PLIST="$ROOT/Client/macos/info.plist"
 
 need_sudo() {
-	[[ ! -w /Applications ]]
+	if [[ ! -w /Applications ]]; then
+		return 0
+	fi
+	if [[ -e "$INSTALL_PATH" ]] && [[ ! -w "$INSTALL_PATH" ]]; then
+		return 0
+	fi
+	return 1
 }
 
 run_as_root() {
 	if need_sudo; then
-		echo "Administrator rights are required to write to /Applications."
+		if [[ -e "$INSTALL_PATH" ]] && [[ ! -w "$INSTALL_PATH" ]]; then
+			echo "The existing app was installed with administrator rights (e.g. via the .pkg)."
+			echo "Your password is needed once to replace /Applications/OmiibaConnect.app."
+		else
+			echo "Administrator rights are required to write to /Applications."
+		fi
 		exec sudo -E "$0" "$@"
+	fi
+}
+
+fix_install_ownership() {
+	# After a sudo update, hand the bundle back to the logged-in user so future dev updates work without sudo.
+	if [[ "$(id -u)" -eq 0 ]] && [[ -n "${SUDO_USER:-}" ]] && [[ -d "$INSTALL_PATH" ]]; then
+		local grp
+		grp="$(id -gn "$SUDO_USER" 2>/dev/null || echo staff)"
+		chown -R "$SUDO_USER:$grp" "$INSTALL_PATH"
 	fi
 }
 
@@ -50,7 +70,9 @@ else
 fi
 
 ditto "$APP" "$INSTALL_PATH"
+fix_install_ownership
 xattr -cr "$INSTALL_PATH" 2>/dev/null || true
+chmod -R a+rX "$INSTALL_PATH" 2>/dev/null || true
 
 echo ""
 echo "Done. Omiiba Connect ${VERSION} (${BUILD}) is in Applications."

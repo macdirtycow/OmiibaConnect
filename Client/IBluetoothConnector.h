@@ -49,4 +49,6 @@ public:
 
 	virtual void discardPendingReceive() noexcept {}
 	virtual void setBlockingRecv(bool blocking) noexcept { (void)blocking; }
+	// Wake transport threads / run loops after app sleep or background (macOS).
+	virtual void serviceTransport() noexcept {}
 };

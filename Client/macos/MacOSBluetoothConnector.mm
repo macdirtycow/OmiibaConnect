@@ -190,10 +190,15 @@ void MacOSBluetoothConnector::connectToMac(MacOSBluetoothConnector* connector) n
 
         std::unique_lock<std::mutex> lk(connector->disconnectionMutex);
         while (connector->running.load()) {
-            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-
+            lk.unlock();
+            [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+            // Also spin main run loop — IOBluetooth may deliver RFCOMM data there after backgrounding.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+            });
+            lk.lock();
             connector->disconnectionConditionVariable.wait_for(
-                lk, std::chrono::milliseconds(1000),
+                lk, std::chrono::milliseconds(100),
                 [&]() { return !connector->running.load(); });
         }
     } catch (...) {
@@ -317,6 +322,14 @@ std::vector<BluetoothDevice> MacOSBluetoothConnector::getConnectedDevices()
         }
     }
     return res;
+}
+
+void MacOSBluetoothConnector::serviceTransport() noexcept
+{
+    disconnectionConditionVariable.notify_all();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    });
 }
 
 void MacOSBluetoothConnector::disconnect() noexcept

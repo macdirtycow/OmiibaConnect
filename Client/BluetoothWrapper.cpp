@@ -225,6 +225,11 @@ void BluetoothWrapper::disconnect() noexcept
 	this->_connector->disconnect();
 }
 
+void BluetoothWrapper::serviceTransport() noexcept
+{
+	this->_connector->serviceTransport();
+}
+
 std::vector<BluetoothDevice> BluetoothWrapper::getConnectedDevices()
 {
 	return this->_connector->getConnectedDevices();

@@ -41,6 +41,7 @@ public:
 	bool isConnected() noexcept;
 	void connect(const std::string& addr);
 	void disconnect() noexcept;
+	void serviceTransport() noexcept;
 
 	std::vector<BluetoothDevice> getConnectedDevices();
 
