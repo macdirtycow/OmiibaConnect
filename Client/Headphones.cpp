@@ -71,8 +71,22 @@ bool Headphones::hasPendingAmbientChanges() const
 
 void Headphones::ensureTransportReady()
 {
+	this->prepareForControl();
+}
+
+void Headphones::prepareForControl()
+{
 	this->_conn.serviceTransport();
-	if (!this->_handshakeComplete) {
+
+	const bool commandStale = this->_conn.isCommandChannelStale(std::chrono::seconds(20));
+	const bool handshakeExpired = this->_handshakeComplete
+		&& (std::chrono::steady_clock::now() - this->_lastHandshakeAt) > std::chrono::seconds(90);
+
+	if (!this->_handshakeComplete || commandStale || handshakeExpired) {
+		if (commandStale || !this->_handshakeComplete) {
+			this->_conn.prepareTransportForCommands();
+			this->invalidateConnectHandshake();
+		}
 		this->performConnectHandshake();
 	}
 }
@@ -84,6 +98,7 @@ void Headphones::setSurroundPosition(SOUND_POSITION_PRESET val)
 		this->_vptType.desired = 0;
 	}
 	this->_surroundPosition.desired = val;
+	this->_virtualSoundDirty = true;
 }
 
 SOUND_POSITION_PRESET Headphones::getSurroundPosition()
@@ -98,6 +113,7 @@ void Headphones::setVptType(int val)
 		this->_surroundPosition.desired = SOUND_POSITION_PRESET::OFF;
 	}
 	this->_vptType.desired = val;
+	this->_virtualSoundDirty = true;
 }
 
 int Headphones::getVptType()
@@ -120,7 +136,9 @@ SOUND_POSITION_PRESET Headphones::getDisplaySurroundPosition() const
 bool Headphones::hasPendingVirtualSoundChanges() const
 {
 	std::lock_guard guard(this->_propertyMtx);
-	return !this->_vptType.isFulfilled() || !this->_surroundPosition.isFulfilled();
+	return this->_virtualSoundDirty
+		|| !this->_vptType.isFulfilled()
+		|| !this->_surroundPosition.isFulfilled();
 }
 
 void Headphones::setEqualizerPreset(EQ_PRESET preset)
@@ -398,7 +416,6 @@ void Headphones::updateVirtualSoundCurrentFromDevice(bool syncDesired)
 		this->_vptType.current = vptFromDevice;
 		this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
 	} else if (userWantsPosition) {
-		// User chose sound position: do not treat lagging VPT!=0 as surround (v17 inverted bug).
 		this->_vptType.current = 0;
 		this->_surroundPosition.current = havePos ? posFromDevice : desiredPos;
 	} else {
@@ -598,6 +615,7 @@ bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 		std::lock_guard guard(this->_propertyMtx);
 		this->_vptType.fulfill();
 		this->_surroundPosition.fulfill();
+		this->_virtualSoundDirty = false;
 	}
 
 	if (this->_capabilities.supportsTouchSensor) {
@@ -893,8 +911,17 @@ void Headphones::setEqChangesIfNeeded()
 
 void Headphones::setVirtualSoundChangesIfNeeded()
 {
-	if (!this->_capabilities.supportsVirtualSound || (this->_vptType.isFulfilled() && this->_surroundPosition.isFulfilled())) {
+	if (!this->_capabilities.supportsVirtualSound) {
 		return;
+	}
+
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		if (!this->_virtualSoundDirty
+			&& this->_vptType.isFulfilled()
+			&& this->_surroundPosition.isFulfilled()) {
+			return;
+		}
 	}
 
 	int desiredVpt = 0;
@@ -914,74 +941,121 @@ void Headphones::setVirtualSoundChangesIfNeeded()
 	bool appliedSurround = false;
 	bool appliedPosition = false;
 
-	auto sendVpt = [&](unsigned char preset) {
-		this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(VPT_INQUIRED_TYPE::VPT, preset));
-	};
-	auto sendSoundPosition = [&](SOUND_POSITION_PRESET preset) {
-		this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(
-			VPT_INQUIRED_TYPE::SOUND_POSITION,
-			static_cast<unsigned char>(preset)));
-	};
-	const auto pauseForDevice = []() {
-		std::this_thread::sleep_for(std::chrono::milliseconds(120));
-	};
+	constexpr int kFastDrainMs = 40;
+	constexpr int kSlowDrainMs = 120;
 
-	if (wantVpt) {
-		if (currentPosition != SOUND_POSITION_PRESET::OFF) {
-			sendSoundPosition(SOUND_POSITION_PRESET::OFF);
-			pauseForDevice();
-		}
-		sendVpt(static_cast<unsigned char>(desiredVpt));
-		appliedSurround = true;
-	} else if (wantPosition) {
-		const bool positionToPosition = currentVpt == 0
-			&& currentPosition != SOUND_POSITION_PRESET::OFF
-			&& desiredPosition != SOUND_POSITION_PRESET::OFF;
-		if (currentVpt != 0) {
-			sendVpt(0);
-			pauseForDevice();
-		}
-		if (!positionToPosition
-			&& currentPosition != SOUND_POSITION_PRESET::OFF
-			&& currentPosition != desiredPosition) {
-			sendSoundPosition(SOUND_POSITION_PRESET::OFF);
-			pauseForDevice();
-		}
-		sendSoundPosition(desiredPosition);
-		appliedPosition = true;
-	} else {
-		if (currentPosition != SOUND_POSITION_PRESET::OFF) {
-			sendSoundPosition(SOUND_POSITION_PRESET::OFF);
-			pauseForDevice();
-		}
-		if (currentVpt != 0) {
-			sendVpt(0);
-			pauseForDevice();
-		}
-	}
-
-	if (wantPosition && currentVpt == 0 && desiredPosition != SOUND_POSITION_PRESET::OFF) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(60));
-	} else if (!wantVpt && !wantPosition) {
-		std::this_thread::sleep_for(std::chrono::milliseconds(180));
-	} else {
-		pauseForDevice();
-	}
-	this->updateVirtualSoundCurrentFromDevice();
-	{
+	auto sendVpt = [&](unsigned char preset, int drainMs) {
+		this->_conn.sendCommand(
+			CommandSerializer::serializeVPTSetting(VPT_INQUIRED_TYPE::VPT, preset),
+			DATA_TYPE::DATA_MDR,
+			drainMs);
+	};
+	auto sendSoundPosition = [&](SOUND_POSITION_PRESET preset, int drainMs) {
+		this->_conn.sendCommand(
+			CommandSerializer::serializeVPTSetting(
+				VPT_INQUIRED_TYPE::SOUND_POSITION,
+				static_cast<unsigned char>(preset)),
+			DATA_TYPE::DATA_MDR,
+			drainMs);
+	};
+	const auto pauseMs = [](int ms) {
+		std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+	};
+	auto commitVirtualSound = [&](bool surround, bool position) {
 		std::lock_guard guard(this->_propertyMtx);
-		if (appliedSurround) {
+		if (surround) {
 			this->_vptType.current = desiredVpt;
 			this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
-		} else if (appliedPosition) {
+		} else if (position) {
 			this->_vptType.current = 0;
 			this->_surroundPosition.current = desiredPosition;
+		} else if (!wantVpt && !wantPosition) {
+			this->_vptType.current = 0;
+			this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
 		}
 		if (this->_vptType.current == this->_vptType.desired
 			&& this->_surroundPosition.current == this->_surroundPosition.desired) {
 			this->_vptType.fulfill();
 			this->_surroundPosition.fulfill();
+			this->_virtualSoundDirty = false;
 		}
+	};
+
+	// Always read the device first — cached Property can say VPT=0 while XM3 is still in surround.
+	this->snapshotVirtualSoundFromDevice();
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		currentVpt = this->_vptType.current;
+		currentPosition = this->_surroundPosition.current;
+	}
+
+	bool virtualSoundApplied = false;
+	if (wantPosition && currentVpt == 0) {
+		const bool positionToPosition = currentPosition != SOUND_POSITION_PRESET::OFF
+			&& desiredPosition != SOUND_POSITION_PRESET::OFF
+			&& currentPosition != desiredPosition;
+		if (positionToPosition) {
+			sendSoundPosition(desiredPosition, kFastDrainMs);
+		} else if (currentPosition != SOUND_POSITION_PRESET::OFF && currentPosition != desiredPosition) {
+			sendSoundPosition(SOUND_POSITION_PRESET::OFF, kFastDrainMs);
+			pauseMs(70);
+			sendSoundPosition(desiredPosition, kFastDrainMs);
+		} else {
+			sendSoundPosition(desiredPosition, kFastDrainMs);
+		}
+		pauseMs(80);
+		this->snapshotVirtualSoundFromDevice();
+		{
+			std::lock_guard guard(this->_propertyMtx);
+			currentVpt = this->_vptType.current;
+			currentPosition = this->_surroundPosition.current;
+		}
+		if (currentVpt == 0 && currentPosition == desiredPosition) {
+			commitVirtualSound(false, true);
+			virtualSoundApplied = true;
+		}
+	}
+
+	if (!virtualSoundApplied && wantVpt) {
+		if (currentPosition != SOUND_POSITION_PRESET::OFF) {
+			sendSoundPosition(SOUND_POSITION_PRESET::OFF, kSlowDrainMs);
+			pauseMs(80);
+		}
+		if (currentVpt != 0) {
+			sendVpt(0, kSlowDrainMs);
+			pauseMs(100);
+		}
+		sendVpt(static_cast<unsigned char>(desiredVpt), kSlowDrainMs);
+		appliedSurround = true;
+		virtualSoundApplied = true;
+	} else if (!virtualSoundApplied && wantPosition) {
+		sendVpt(0, kSlowDrainMs);
+		pauseMs(100);
+		sendSoundPosition(SOUND_POSITION_PRESET::OFF, kSlowDrainMs);
+		pauseMs(80);
+		sendSoundPosition(desiredPosition, kSlowDrainMs);
+		appliedPosition = true;
+		virtualSoundApplied = true;
+		pauseMs(120);
+	} else if (!virtualSoundApplied) {
+		if (currentPosition != SOUND_POSITION_PRESET::OFF) {
+			sendSoundPosition(SOUND_POSITION_PRESET::OFF, kSlowDrainMs);
+			pauseMs(80);
+		}
+		if (currentVpt != 0) {
+			sendVpt(0, kSlowDrainMs);
+			pauseMs(80);
+		}
+	}
+
+	if (virtualSoundApplied) {
+		if (!wantVpt && !wantPosition) {
+			pauseMs(120);
+		} else if (appliedSurround || appliedPosition) {
+			pauseMs(80);
+		}
+		this->updateVirtualSoundCurrentFromDevice();
+		commitVirtualSound(appliedSurround, appliedPosition);
 	}
 }
 

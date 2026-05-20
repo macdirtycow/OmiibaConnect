@@ -71,6 +71,8 @@ public:
 	bool performConnectHandshake();
 	bool ensureConnectHandshake();
 	void ensureTransportReady();
+	/** Call before applying user settings after idle or background. */
+	void prepareForControl();
 	void invalidateConnectHandshake();
 	/** Lightweight round-trip; false means the RFCOMM link is stale. */
 	bool probeConnection();
@@ -114,6 +116,7 @@ private:
 	DeviceCapabilities _capabilities;
 	std::string _deviceName;
 	bool _handshakeComplete = false;
+	bool _virtualSoundDirty = false;
 	std::chrono::steady_clock::time_point _lastHandshakeAt{};
 	BluetoothWrapper& _conn;
 };

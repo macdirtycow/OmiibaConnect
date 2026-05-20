@@ -7,6 +7,13 @@ constexpr size_t kMaxRecvStagingBytes = 1024;
 constexpr int kMaxRecvLoopsPerCall = 24;
 constexpr auto kQueryDeadline = std::chrono::milliseconds(4500);
 constexpr auto kPostSendAckDeadline = std::chrono::milliseconds(3500);
+
+int64_t steadyClockEpochMs()
+{
+	return std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now().time_since_epoch())
+		.count();
+}
 }
 
 BluetoothWrapper::BluetoothWrapper(std::unique_ptr<IBluetoothConnector> connector)
@@ -80,6 +87,7 @@ int BluetoothWrapper::sendCommand(const std::vector<char>& bytes, DATA_TYPE data
 	if (postDrainMs > 0) {
 		_drainIncomingMessages(std::chrono::milliseconds(postDrainMs));
 	}
+	this->noteCommandExchange();
 	return bytesSent;
 }
 
@@ -216,6 +224,7 @@ void BluetoothWrapper::connect(const std::string& addr)
 	this->_recvInMessage = false;
 	this->_seqNumber = 0;
 	this->_connector->connect(addr);
+	this->noteCommandExchange();
 }
 
 void BluetoothWrapper::disconnect() noexcept
@@ -230,6 +239,30 @@ void BluetoothWrapper::disconnect() noexcept
 void BluetoothWrapper::serviceTransport() noexcept
 {
 	this->_connector->serviceTransport();
+}
+
+void BluetoothWrapper::prepareTransportForCommands() noexcept
+{
+	std::lock_guard guard(this->_connectorMtx);
+	this->_seqNumber = 0;
+	this->_recvStaging.clear();
+	this->_recvInMessage = false;
+	this->_connector->discardPendingReceive();
+	this->_connector->serviceTransport();
+}
+
+void BluetoothWrapper::noteCommandExchange() noexcept
+{
+	this->_lastCommandExchangeEpochMs.store(steadyClockEpochMs());
+}
+
+bool BluetoothWrapper::isCommandChannelStale(std::chrono::seconds idle) const noexcept
+{
+	const int64_t last = this->_lastCommandExchangeEpochMs.load();
+	if (last <= 0) {
+		return true;
+	}
+	return steadyClockEpochMs() - last > idle.count() * 1000;
 }
 
 std::vector<BluetoothDevice> BluetoothWrapper::getConnectedDevices()

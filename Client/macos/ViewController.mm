@@ -129,6 +129,7 @@ NSStatusItem* statusItem = nil;
     NSInteger _eqDebounceGeneration;
     NSInteger _eqManualUiHoldGeneration;
     uint64_t _bluetoothSession;
+    dispatch_source_t _linkKeepaliveSource;
     NSMenu* _statusMenu;
     NSMenuItem* _statusMenuConnect;
     NSMenuItem* _statusMenuDisconnect;
@@ -286,32 +287,102 @@ NSStatusItem* statusItem = nil;
     [self statusItemClick:sender];
 }
 
-- (BOOL)recoverBluetoothLinkOnWorkerQueue {
+- (BOOL)probeBluetoothLinkOnWorkerQueue {
     if (!bt.isConnected() || headphones == nullptr) {
         return NO;
     }
 
     bt.serviceTransport();
-    headphones->invalidateConnectHandshake();
-    headphones->performConnectHandshake();
-
     for (int attempt = 0; attempt < 3; attempt++) {
-        bt.serviceTransport();
         if (headphones->probeConnection()) {
             return YES;
         }
         if (attempt < 2) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            bt.serviceTransport();
         }
+    }
+    return NO;
+}
+
+- (BOOL)recoverBluetoothLinkOnWorkerQueue {
+    if (!bt.isConnected() || headphones == nullptr) {
+        return NO;
+    }
+
+    if ([self probeBluetoothLinkOnWorkerQueue]) {
+        return YES;
+    }
+
+    bt.prepareTransportForCommands();
+    headphones->invalidateConnectHandshake();
+    headphones->performConnectHandshake();
+
+    if ([self probeBluetoothLinkOnWorkerQueue]) {
+        return YES;
     }
 
     (void)headphones->refreshFromDevice(false);
     bt.serviceTransport();
-    return headphones->probeConnection();
+    return [self probeBluetoothLinkOnWorkerQueue];
+}
+
+- (void)startBluetoothLinkKeepalive {
+    if (_bluetoothQueue == nil || _linkKeepaliveSource != nil) {
+        return;
+    }
+
+    _linkKeepaliveSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _bluetoothQueue);
+    dispatch_source_set_timer(
+        _linkKeepaliveSource,
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)),
+        (int64_t)(25 * NSEC_PER_SEC),
+        (int64_t)(5 * NSEC_PER_SEC));
+    __weak ViewController* weakSelf = self;
+    dispatch_source_set_event_handler(_linkKeepaliveSource, ^{
+        ViewController* strong = weakSelf;
+        if (strong == nil) {
+            return;
+        }
+        [strong performBluetoothLinkKeepaliveOnWorkerQueue];
+    });
+    dispatch_resume(_linkKeepaliveSource);
+}
+
+- (void)stopBluetoothLinkKeepalive {
+    if (_linkKeepaliveSource == nil) {
+        return;
+    }
+    dispatch_source_cancel(_linkKeepaliveSource);
+    _linkKeepaliveSource = nil;
+}
+
+- (void)performBluetoothLinkKeepaliveOnWorkerQueue {
+    if (!bt.isConnected() || headphones == nullptr) {
+        return;
+    }
+
+    bt.serviceTransport();
+
+    if (bt.isCommandChannelStale(std::chrono::seconds(25))) {
+        bt.prepareTransportForCommands();
+        headphones->invalidateConnectHandshake();
+        headphones->performConnectHandshake();
+        return;
+    }
+
+    if ([self probeBluetoothLinkOnWorkerQueue]) {
+        return;
+    }
+
+    if ([self recoverBluetoothLinkOnWorkerQueue]) {
+        (void)headphones->refreshFromDevice(false);
+    }
 }
 
 - (void)shutdownBluetoothSessionWithMainBlock:(dispatch_block_t)mainBlock {
     ++_bluetoothSession;
+    [self stopBluetoothLinkKeepalive];
     dispatch_queue_t queue = _bluetoothQueue ?: dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
     dispatch_async(queue, ^{
         bt.disconnect();
@@ -383,6 +454,7 @@ NSStatusItem* statusItem = nil;
         }
 
         if ([self recoverBluetoothLinkOnWorkerQueue]) {
+            (void)headphones->refreshFromDevice(false);
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self enableInteractiveControlsIfConnected];
                 if (headphones != nullptr) {
@@ -1194,6 +1266,7 @@ NSStatusItem* statusItem = nil;
             [ANCValueLabel setTextColor:NSColor.labelColor];
             headphones = new Headphones(bt);
             headphones->configureForDevice([[device nameOrAddress] UTF8String]);
+            [self startBluetoothLinkKeepalive];
             [self setConnectionIndicatorConnected:YES];
             [self setExtendedControlsEnabled:YES];
             [self applyCapabilitiesToUI];
@@ -1342,7 +1415,7 @@ NSStatusItem* statusItem = nil;
         }
 
         try {
-            hp->ensureTransportReady();
+            hp->prepareForControl();
             if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
                 return;
             }
@@ -1422,7 +1495,7 @@ NSStatusItem* statusItem = nil;
                 return;
             }
             bt.serviceTransport();
-            headphones->ensureTransportReady();
+            headphones->prepareForControl();
             headphones->primeManualEqFromDevice();
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (debounceGeneration != self->_eqDebounceGeneration) {
@@ -1541,15 +1614,15 @@ NSStatusItem* statusItem = nil;
         }
 
         try {
-            hp->ensureTransportReady();
+            hp->prepareForControl();
 
-            for (int attempt = 0; attempt < 5 && hp->hasPendingVirtualSoundChanges(); attempt++) {
+            for (int attempt = 0; attempt < 3 && hp->hasPendingVirtualSoundChanges(); attempt++) {
                 if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
                     return;
                 }
                 hp->setVirtualSoundChangesIfNeeded();
-                if (attempt < 4) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                if (attempt < 2 && hp->hasPendingVirtualSoundChanges()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(80));
                 }
             }
             if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {

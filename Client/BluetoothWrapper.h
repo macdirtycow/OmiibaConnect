@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <initializer_list>
+#include <atomic>
 #include <chrono>
 
 
@@ -46,6 +47,11 @@ public:
 	void connect(const std::string& addr);
 	void disconnect() noexcept;
 	void serviceTransport() noexcept;
+	/** Clears stale RFCOMM data and resets sequence state before commands after idle. */
+	void prepareTransportForCommands() noexcept;
+	/** Updated only after successful SET commands (not battery probes). */
+	void noteCommandExchange() noexcept;
+	bool isCommandChannelStale(std::chrono::seconds idle) const noexcept;
 
 	std::vector<BluetoothDevice> getConnectedDevices();
 
@@ -63,4 +69,5 @@ private:
 	unsigned char _seqNumber = 0;
 	Buffer _recvStaging;
 	bool _recvInMessage = false;
+	std::atomic<int64_t> _lastCommandExchangeEpochMs{0};
 };
