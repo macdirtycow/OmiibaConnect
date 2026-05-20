@@ -59,7 +59,42 @@ namespace ProtocolParser {
 		return std::string(payload.begin() + 3, payload.begin() + 3 + expectedLength);
 	}
 
-	bool applyAmbientSoundControl(Headphones& headphones, const Buffer& payload) {
+	bool applyAmbientSoundControlV1(Headphones& headphones, const Buffer& payload, bool syncDesired) {
+		// NCASM_RET: 67 02 + 6 data bytes (Plutoberth layout or SongPal zk/b0).
+		if (payload.size() < 8 || static_cast<unsigned char>(payload[1]) != 0x02) {
+			return false;
+		}
+
+		const unsigned char ncAsmSetting = static_cast<unsigned char>(payload[3]);
+		const unsigned char dualSingle = static_cast<unsigned char>(payload[4]);
+		const unsigned char asmSetting = static_cast<unsigned char>(payload[5]);
+		const unsigned char asmId = static_cast<unsigned char>(payload[6]);
+		const unsigned char levelByte = static_cast<unsigned char>(payload[7]);
+
+		const bool focusOnVoice = asmId == static_cast<unsigned char>(ASM_ID::VOICE);
+
+		if (dualSingle == static_cast<unsigned char>(NC_DUAL_SINGLE_VALUE::DUAL)
+			|| dualSingle == static_cast<unsigned char>(NC_DUAL_SINGLE_VALUE::SINGLE)) {
+			headphones.applyDeviceState(false, focusOnVoice, 0, syncDesired);
+			return true;
+		}
+
+		if (ncAsmSetting == static_cast<unsigned char>(NC_ASM_SETTING_TYPE::LEVEL_ADJUSTMENT)
+			|| (ncAsmSetting == static_cast<unsigned char>(NC_ASM_SETTING_TYPE::DUAL_SINGLE_OFF)
+				&& asmSetting == static_cast<unsigned char>(ASM_SETTING_TYPE::LEVEL_ADJUSTMENT))) {
+			const int level = static_cast<int>(levelByte);
+			if (level < 0) {
+				headphones.applyDeviceState(false, focusOnVoice, 0, syncDesired);
+			} else {
+				headphones.applyDeviceState(true, focusOnVoice, level, syncDesired);
+			}
+			return true;
+		}
+
+		return false;
+	}
+
+	bool applyAmbientSoundControl(Headphones& headphones, const Buffer& payload, bool syncDesired) {
 		if (payload.size() != 8) {
 			return false;
 		}
@@ -72,14 +107,15 @@ namespace ProtocolParser {
 			ambientEnabled = false;
 			asmLevel = 0;
 		}
-		else if (payload[3] == 0x00) {
-			if (payload[4] == 0x00) {
+		else if (payload[3] == 0x00 || payload[3] == 0x01) {
+			if (payload[4] == static_cast<unsigned char>(NC_DUAL_SINGLE_VALUE::DUAL)
+				|| payload[4] == static_cast<unsigned char>(NC_DUAL_SINGLE_VALUE::SINGLE)) {
+				ambientEnabled = false;
+				asmLevel = 0;
+			}
+			else if (payload[4] == static_cast<unsigned char>(NC_DUAL_SINGLE_VALUE::OFF)) {
 				ambientEnabled = true;
 				asmLevel = static_cast<unsigned char>(payload[7]);
-			}
-			else if (payload[4] == 0x01) {
-				ambientEnabled = true;
-				asmLevel = 0;
 			}
 			else {
 				return false;
@@ -89,11 +125,11 @@ namespace ProtocolParser {
 			return false;
 		}
 
-		headphones.applyDeviceState(ambientEnabled, focusOnVoice, asmLevel);
+		headphones.applyDeviceState(ambientEnabled, focusOnVoice, asmLevel, syncDesired);
 		return true;
 	}
 
-	bool applyAmbientSoundControlV2(Headphones& headphones, const Buffer& payload) {
+	bool applyAmbientSoundControlV2(Headphones& headphones, const Buffer& payload, bool syncDesired) {
 		if (payload.size() < 7) {
 			return false;
 		}
@@ -120,24 +156,24 @@ namespace ProtocolParser {
 			asmLevel = static_cast<unsigned char>(payload[levelIndex]);
 		}
 
-		headphones.applyDeviceState(ambientEnabled, focusOnVoice, asmLevel);
+		headphones.applyDeviceState(ambientEnabled, focusOnVoice, asmLevel, syncDesired);
 		return true;
 	}
 
-	bool applyVirtualSound(Headphones& headphones, const Buffer& payload) {
+	bool applyVirtualSound(Headphones& headphones, const Buffer& payload, bool syncDesired) {
 		if (payload.size() != 3) {
 			return false;
 		}
 
 		if (payload[1] == 0x01) {
-			headphones.applyDeviceVpt(static_cast<int>(static_cast<unsigned char>(payload[2])));
-			headphones.applyDeviceSurroundPosition(SOUND_POSITION_PRESET::OFF);
+			headphones.applyDeviceVpt(static_cast<int>(static_cast<unsigned char>(payload[2])), syncDesired);
+			headphones.applyDeviceSurroundPosition(SOUND_POSITION_PRESET::OFF, syncDesired);
 			return true;
 		}
 
 		if (payload[1] == 0x02) {
-			headphones.applyDeviceVpt(0);
-			headphones.applyDeviceSurroundPosition(static_cast<SOUND_POSITION_PRESET>(payload[2]));
+			headphones.applyDeviceVpt(0, syncDesired);
+			headphones.applyDeviceSurroundPosition(static_cast<SOUND_POSITION_PRESET>(payload[2]), syncDesired);
 			return true;
 		}
 

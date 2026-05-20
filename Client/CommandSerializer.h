@@ -1,6 +1,7 @@
 #pragma once
 #include "Constants.h"
 #include "ByteMagic.h"
+#include <array>
 #include <cstddef>
 #include <vector>
 #include <stdexcept>
@@ -39,10 +40,14 @@ namespace CommandSerializer
 
 	NC_DUAL_SINGLE_VALUE getDualSingleForAsmLevel(char asmLevel, int maxAsmLevel);
 	Buffer serializeNcAndAsmSetting(NC_ASM_EFFECT ncAsmEffect, NC_ASM_SETTING_TYPE ncAsmSettingType, ASM_SETTING_TYPE asmSettingType, ASM_ID asmId, char asmLevel, int maxAsmLevel);
+	// WH-1000XM3/XM4 ambient level (SongPal zk/b0 via rg/c).
+	Buffer serializeNcAndAsmAmbientLevelV1(NC_ASM_EFFECT effect, ASM_ID asmId, int ambientLevel);
+	Buffer serializeNcAndAsmNcDualV1(NC_ASM_EFFECT effect, ASM_ID asmId);
 	Buffer serializeAmbientSoundControlV2(bool ambientEnabled, bool focusOnVoice, int asmLevel, bool windNoiseMode);
 	Buffer serializeVPTSetting(VPT_INQUIRED_TYPE type, unsigned char preset);
 	Buffer serializePayload(const Buffer& payloadBytes);
 	Buffer serializeEqualizerPreset(EQ_PRESET preset);
+	Buffer serializeEqualizerWithBands(EQ_PRESET preset, int clearBass, const std::array<int, EQ_BAND_COUNT>& bands);
 	Buffer serializeTouchSensor(bool enabled);
 	Buffer serializeVoiceGuidance(bool enabled);
 }

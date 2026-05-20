@@ -6,6 +6,7 @@
 #include "DeviceProfile.h"
 #include "DeviceStatus.h"
 
+#include <array>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -41,10 +42,16 @@ public:
 
 	void setVptType(int val);
 	int getVptType();
+	int getDisplayVptType() const;
+	SOUND_POSITION_PRESET getDisplaySurroundPosition() const;
+	bool hasPendingVirtualSoundChanges() const;
 
 	void setEqualizerPreset(EQ_PRESET preset);
+	void setEqualizerWithBands(EQ_PRESET preset, int clearBass, const std::array<int, EQ_BAND_COUNT>& bands);
 	EQ_PRESET getEqualizerPreset() const;
 	EQ_PRESET getDisplayEqPreset() const;
+	int getDisplayEqBass() const;
+	std::array<int, EQ_BAND_COUNT> getDisplayEqBands() const;
 	bool hasPendingEqChanges() const;
 
 	void setTouchSensorEnabled(bool enabled);
@@ -61,11 +68,22 @@ public:
 	bool performConnectHandshake();
 	bool refreshFromDevice(bool includeExtendedSettings = true);
 	bool isChanged();
+	bool hasAnyPendingChanges() const;
 	void setChanges();
+	void setAmbientChangesIfNeeded();
+	void setVirtualSoundChangesIfNeeded();
+	void resyncAmbientAfterVirtualSoundIfNeeded();
+	void setEqChangesIfNeeded();
+	void setTouchAndVoiceChangesIfNeeded();
 
-	void applyDeviceState(bool ambientEnabled, bool focusOnVoice, int asmLevel);
-	void applyDeviceVpt(int vptType);
-	void applyDeviceSurroundPosition(SOUND_POSITION_PRESET preset);
+	void applyDeviceState(bool ambientEnabled, bool focusOnVoice, int asmLevel, bool syncDesired = false);
+	void applyDeviceVpt(int vptType, bool syncDesired = false);
+	void applyDeviceSurroundPosition(SOUND_POSITION_PRESET preset, bool syncDesired = false);
+	void sendAmbientV1Changes();
+	void updateEqCurrentFromDevice();
+	void sendEqChanges();
+	void updateVirtualSoundCurrentFromDevice(bool syncDesired = false);
+	void updateAmbientCurrentFromDevice();
 private:
 	Property<bool> _ambientSoundControl = { 0 };
 	Property<bool> _focusOnVoice = { 0 };
@@ -73,6 +91,9 @@ private:
 	Property<SOUND_POSITION_PRESET> _surroundPosition = { SOUND_POSITION_PRESET::OFF, SOUND_POSITION_PRESET::OFF };
 	Property<int> _vptType = { 0 };
 	Property<EQ_PRESET> _eqPreset = { EQ_PRESET::OFF };
+	Property<int> _eqBass = { 0 };
+	Property<std::array<int, EQ_BAND_COUNT>> _eqBands = { std::array<int, EQ_BAND_COUNT>{} };
+	bool _eqUseBandPayload = false;
 	Property<bool> _touchSensorEnabled = { true };
 	Property<bool> _voiceGuidanceEnabled = { true };
 	mutable std::mutex _propertyMtx;

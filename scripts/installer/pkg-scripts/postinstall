@@ -1,0 +1,12 @@
+#!/bin/sh
+# Finish in-place install/update under /Applications.
+
+APP="/Applications/OmiibaConnect.app"
+
+if [ -d "$APP" ]; then
+	# Ad-hoc / local builds: drop quarantine that can block launch after download.
+	xattr -cr "$APP" 2>/dev/null || true
+	chmod -R a+rX "$APP" 2>/dev/null || true
+fi
+
+exit 0

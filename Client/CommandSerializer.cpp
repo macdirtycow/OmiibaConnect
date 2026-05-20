@@ -1,5 +1,7 @@
 #include "CommandSerializer.h"
 
+#include <algorithm>
+
 constexpr unsigned char ESCAPED_BYTE_SENTRY = 61;
 constexpr unsigned char ESCAPED_60 = 44;
 constexpr unsigned char ESCAPED_61 = 45;
@@ -202,6 +204,35 @@ namespace CommandSerializer
 		return ret;
 	}
 
+	Buffer serializeNcAndAsmAmbientLevelV1(NC_ASM_EFFECT effect, ASM_ID asmId, int ambientLevel)
+	{
+		const int level = std::max(0, std::min(ambientLevel, 255));
+		Buffer ret;
+		ret.push_back(static_cast<unsigned char>(COMMAND_TYPE::NCASM_SET_PARAM));
+		ret.push_back(static_cast<unsigned char>(NC_ASM_INQUIRED_TYPE::NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE));
+		ret.push_back(static_cast<unsigned char>(effect));
+		ret.push_back(static_cast<unsigned char>(NC_ASM_SETTING_TYPE::DUAL_SINGLE_OFF));
+		ret.push_back(static_cast<unsigned char>(NC_DUAL_SINGLE_VALUE::OFF));
+		ret.push_back(static_cast<unsigned char>(ASM_SETTING_TYPE::LEVEL_ADJUSTMENT));
+		ret.push_back(static_cast<unsigned char>(asmId));
+		ret.push_back(static_cast<unsigned char>(level));
+		return ret;
+	}
+
+	Buffer serializeNcAndAsmNcDualV1(NC_ASM_EFFECT effect, ASM_ID asmId)
+	{
+		Buffer ret;
+		ret.push_back(static_cast<unsigned char>(COMMAND_TYPE::NCASM_SET_PARAM));
+		ret.push_back(static_cast<unsigned char>(NC_ASM_INQUIRED_TYPE::NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE));
+		ret.push_back(static_cast<unsigned char>(effect));
+		ret.push_back(static_cast<unsigned char>(NC_ASM_SETTING_TYPE::DUAL_SINGLE_OFF));
+		ret.push_back(static_cast<unsigned char>(NC_DUAL_SINGLE_VALUE::DUAL));
+		ret.push_back(static_cast<unsigned char>(ASM_SETTING_TYPE::LEVEL_ADJUSTMENT));
+		ret.push_back(static_cast<unsigned char>(asmId));
+		ret.push_back(0);
+		return ret;
+	}
+
 	Buffer serializeAmbientSoundControlV2(bool ambientEnabled, bool focusOnVoice, int asmLevel, bool windNoiseMode)
 	{
 		const unsigned char variant = windNoiseMode ? 0x17 : 0x15;
@@ -246,6 +277,12 @@ namespace CommandSerializer
 		return payloadBytes;
 	}
 
+	static unsigned char encodeEqLevel(int level)
+	{
+		const int clamped = std::max(EQ_LEVEL_MIN, std::min(EQ_LEVEL_MAX, level));
+		return static_cast<unsigned char>(clamped + 10);
+	}
+
 	Buffer serializeEqualizerPreset(EQ_PRESET preset)
 	{
 		Buffer ret;
@@ -253,6 +290,22 @@ namespace CommandSerializer
 		ret.push_back(0x01);
 		ret.push_back(static_cast<unsigned char>(preset));
 		ret.push_back(0x00);
+		return ret;
+	}
+
+	Buffer serializeEqualizerWithBands(EQ_PRESET preset, int clearBass, const std::array<int, EQ_BAND_COUNT>& bands)
+	{
+		// Sony SongPal (zk.t) / Gadgetbridge: 58 01 [preset] [count] clearBass + 5 bands (each level + 10).
+		// Band-step updates use preset UNSPECIFIED (0xff) after MANUAL mode is selected on the device.
+		Buffer ret;
+		ret.push_back(static_cast<unsigned char>(PAYLOAD_CMD::EQ_SET));
+		ret.push_back(0x01); // EqEbbInquiredType::PRESET_EQ
+		ret.push_back(static_cast<unsigned char>(preset));
+		ret.push_back(static_cast<unsigned char>(1 + EQ_BAND_COUNT));
+		ret.push_back(static_cast<unsigned char>(encodeEqLevel(clearBass)));
+		for (int band : bands) {
+			ret.push_back(static_cast<unsigned char>(encodeEqLevel(band)));
+		}
 		return ret;
 	}
 
@@ -268,10 +321,11 @@ namespace CommandSerializer
 
 	Buffer serializeVoiceGuidance(bool enabled)
 	{
+		// table2: SET 48, inquired 01, DetailedDataType::ON_OFF 01, value.
 		Buffer ret;
 		ret.push_back(static_cast<unsigned char>(VOICE_GUIDANCE_CMD::SET_PARAM));
 		ret.push_back(static_cast<unsigned char>(VOICE_GUIDANCE_INQUIRED::VOICE_GUIDANCE_SETTING));
-		ret.push_back(static_cast<unsigned char>(VOICE_GUIDANCE_INQUIRED::VOICE_GUIDANCE_SETTING));
+		ret.push_back(0x01);
 		ret.push_back(enabled ? 0x01 : 0x00);
 		return ret;
 	}

@@ -36,6 +36,8 @@ NSStatusItem* statusItem;
 @property (strong, nonatomic) NSProgressIndicator *refreshSpinner;
 @property (strong, nonatomic) NSScrollView *scrollView;
 @property (strong, nonatomic) NSTextField *modelLabel;
+@property (strong, nonatomic) NSStackView *manualEqPanel;
+@property (strong, nonatomic) NSSegmentedControl *eqProfileSegment;
 
 - (void)applyCapabilitiesToUI;
 @end

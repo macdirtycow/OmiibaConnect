@@ -187,7 +187,24 @@ enum class EQ_PRESET : unsigned char
 	BASS_BOOST = 0x16,
 	SPEECH = 0x17,
 	MANUAL = 0xa0,
+	// Band-step writes use UNSPECIFIED on the wire (Sony SongPal / Gadgetbridge), not MANUAL.
+	UNSPECIFIED = 0xff,
+	USER_PROFILE_1 = 0xa1,
+	USER_PROFILE_2 = 0xa2,
+	USER_PROFILE_3 = 0xa3,
 };
+
+constexpr int EQ_BAND_COUNT = 5;
+constexpr int EQ_LEVEL_MIN = -10;
+constexpr int EQ_LEVEL_MAX = 10;
+
+inline bool eqPresetUsesBandPayload(EQ_PRESET preset)
+{
+	return preset == EQ_PRESET::MANUAL
+		|| preset == EQ_PRESET::USER_PROFILE_1
+		|| preset == EQ_PRESET::USER_PROFILE_2
+		|| preset == EQ_PRESET::USER_PROFILE_3;
+}
 
 enum class VPT_PRESET_ID : signed char
 {

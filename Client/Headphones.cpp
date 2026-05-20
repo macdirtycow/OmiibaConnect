@@ -3,8 +3,10 @@
 #include "ProtocolParser.h"
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
 #include <stdexcept>
+#include <thread>
 
 Headphones::Headphones(BluetoothWrapper& conn) : _conn(conn)
 {
@@ -70,6 +72,9 @@ bool Headphones::hasPendingAmbientChanges() const
 void Headphones::setSurroundPosition(SOUND_POSITION_PRESET val)
 {
 	std::lock_guard guard(this->_propertyMtx);
+	if (val != SOUND_POSITION_PRESET::OFF) {
+		this->_vptType.desired = 0;
+	}
 	this->_surroundPosition.desired = val;
 }
 
@@ -81,6 +86,9 @@ SOUND_POSITION_PRESET Headphones::getSurroundPosition()
 void Headphones::setVptType(int val)
 {
 	std::lock_guard guard(this->_propertyMtx);
+	if (val != 0) {
+		this->_surroundPosition.desired = SOUND_POSITION_PRESET::OFF;
+	}
 	this->_vptType.desired = val;
 }
 
@@ -89,10 +97,41 @@ int Headphones::getVptType()
 	return this->_vptType.current;
 }
 
+int Headphones::getDisplayVptType() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	return this->_vptType.isFulfilled() ? this->_vptType.current : this->_vptType.desired;
+}
+
+SOUND_POSITION_PRESET Headphones::getDisplaySurroundPosition() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	return this->_surroundPosition.isFulfilled() ? this->_surroundPosition.current : this->_surroundPosition.desired;
+}
+
+bool Headphones::hasPendingVirtualSoundChanges() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	return !this->_vptType.isFulfilled() || !this->_surroundPosition.isFulfilled();
+}
+
 void Headphones::setEqualizerPreset(EQ_PRESET preset)
 {
 	std::lock_guard guard(this->_propertyMtx);
 	this->_eqPreset.desired = preset;
+	// Preset popup uses the short EQ_SET packet only; custom bands are a separate write path.
+	this->_eqUseBandPayload = false;
+	this->_eqBass.desired = this->_eqBass.current;
+	this->_eqBands.desired = this->_eqBands.current;
+}
+
+void Headphones::setEqualizerWithBands(EQ_PRESET preset, int clearBass, const std::array<int, EQ_BAND_COUNT>& bands)
+{
+	std::lock_guard guard(this->_propertyMtx);
+	this->_eqPreset.desired = preset;
+	this->_eqBass.desired = clearBass;
+	this->_eqBands.desired = bands;
+	this->_eqUseBandPayload = true;
 }
 
 EQ_PRESET Headphones::getEqualizerPreset() const
@@ -109,7 +148,31 @@ EQ_PRESET Headphones::getDisplayEqPreset() const
 bool Headphones::hasPendingEqChanges() const
 {
 	std::lock_guard guard(this->_propertyMtx);
-	return !this->_eqPreset.isFulfilled();
+	if (!this->_eqPreset.isFulfilled()) {
+		return true;
+	}
+	if (this->_eqUseBandPayload && (!this->_eqBass.isFulfilled() || !this->_eqBands.isFulfilled())) {
+		return true;
+	}
+	return false;
+}
+
+int Headphones::getDisplayEqBass() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	if (this->_eqUseBandPayload) {
+		return this->_eqBass.isFulfilled() ? this->_eqBass.current : this->_eqBass.desired;
+	}
+	return this->_deviceStatus.eqBass;
+}
+
+std::array<int, EQ_BAND_COUNT> Headphones::getDisplayEqBands() const
+{
+	std::lock_guard guard(this->_propertyMtx);
+	if (this->_eqUseBandPayload) {
+		return this->_eqBands.isFulfilled() ? this->_eqBands.current : this->_eqBands.desired;
+	}
+	return this->_deviceStatus.eqBands;
 }
 
 void Headphones::setTouchSensorEnabled(bool enabled)
@@ -158,6 +221,8 @@ void Headphones::configureForDevice(std::string_view deviceName)
 	}
 	if (!this->_capabilities.supportsEqualizer) {
 		this->_eqPreset.fulfill();
+		this->_eqBass.fulfill();
+		this->_eqBands.fulfill();
 	}
 	if (!this->_capabilities.supportsVoiceGuidance) {
 		this->_voiceGuidanceEnabled.fulfill();
@@ -168,29 +233,111 @@ void Headphones::configureForDevice(std::string_view deviceName)
 	}
 }
 
-void Headphones::applyDeviceState(bool ambientEnabled, bool focusOnVoice, int asmLevel)
+void Headphones::applyDeviceState(bool ambientEnabled, bool focusOnVoice, int asmLevel, bool syncDesired)
 {
 	std::lock_guard guard(this->_propertyMtx);
 	this->_ambientSoundControl.current = ambientEnabled;
-	this->_ambientSoundControl.desired = ambientEnabled;
 	this->_focusOnVoice.current = focusOnVoice;
-	this->_focusOnVoice.desired = focusOnVoice;
 	this->_asmLevel.current = asmLevel;
-	this->_asmLevel.desired = asmLevel;
+	if (syncDesired) {
+		this->_ambientSoundControl.desired = ambientEnabled;
+		this->_focusOnVoice.desired = focusOnVoice;
+		this->_asmLevel.desired = asmLevel;
+		this->_ambientSoundControl.fulfill();
+		this->_focusOnVoice.fulfill();
+		this->_asmLevel.fulfill();
+	}
 }
 
-void Headphones::applyDeviceVpt(int vptType)
+void Headphones::updateAmbientCurrentFromDevice()
+{
+	if (this->_capabilities.usesV2AmbientSound) {
+		return;
+	}
+
+	const Buffer ncQuery = {
+		static_cast<char>(COMMAND_TYPE::NCASM_GET_PARAM),
+		static_cast<char>(NC_ASM_INQUIRED_TYPE::NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE)
+	};
+	if (auto payload = this->_conn.sendQuery(ncQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::NCASM_RET))) {
+		ProtocolParser::applyAmbientSoundControlV1(*this, *payload);
+	}
+}
+
+void Headphones::applyDeviceVpt(int vptType, bool syncDesired)
 {
 	std::lock_guard guard(this->_propertyMtx);
 	this->_vptType.current = vptType;
-	this->_vptType.desired = vptType;
+	if (syncDesired) {
+		this->_vptType.desired = vptType;
+	}
 }
 
-void Headphones::applyDeviceSurroundPosition(SOUND_POSITION_PRESET preset)
+void Headphones::applyDeviceSurroundPosition(SOUND_POSITION_PRESET preset, bool syncDesired)
 {
 	std::lock_guard guard(this->_propertyMtx);
 	this->_surroundPosition.current = preset;
-	this->_surroundPosition.desired = preset;
+	if (syncDesired) {
+		this->_surroundPosition.desired = preset;
+	}
+}
+
+void Headphones::updateVirtualSoundCurrentFromDevice(bool syncDesired)
+{
+	if (!this->_capabilities.supportsVirtualSound) {
+		return;
+	}
+
+	int vptFromDevice = 0;
+	bool haveVpt = false;
+	SOUND_POSITION_PRESET posFromDevice = SOUND_POSITION_PRESET::OFF;
+	bool havePos = false;
+
+	const Buffer soundQuery = {
+		static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
+		0x01
+	};
+	if (auto payload = this->_conn.sendQuery(soundQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
+		if (payload->size() >= 3 && static_cast<unsigned char>((*payload)[1]) == 0x01) {
+			vptFromDevice = static_cast<int>(static_cast<unsigned char>((*payload)[2]));
+			haveVpt = true;
+		}
+	}
+
+	const Buffer soundPosQuery = {
+		static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
+		0x02
+	};
+	if (auto payload = this->_conn.sendQuery(soundPosQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
+		if (payload->size() >= 3 && static_cast<unsigned char>((*payload)[1]) == 0x02) {
+			posFromDevice = static_cast<SOUND_POSITION_PRESET>((*payload)[2]);
+			havePos = true;
+		}
+	}
+
+	std::lock_guard guard(this->_propertyMtx);
+	const int desiredVpt = this->_vptType.desired;
+	const SOUND_POSITION_PRESET desiredPos = this->_surroundPosition.desired;
+	const bool userWantsSurround = desiredVpt != 0;
+	const bool userWantsPosition = desiredVpt == 0 && desiredPos != SOUND_POSITION_PRESET::OFF;
+	const bool deviceSurround = haveVpt && vptFromDevice != 0;
+
+	if (userWantsSurround && deviceSurround) {
+		this->_vptType.current = vptFromDevice;
+		this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+	} else if (userWantsPosition) {
+		// User chose sound position: do not treat lagging VPT!=0 as surround (v17 inverted bug).
+		this->_vptType.current = 0;
+		this->_surroundPosition.current = havePos ? posFromDevice : desiredPos;
+	} else {
+		this->_vptType.current = haveVpt ? vptFromDevice : 0;
+		this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+	}
+
+	if (syncDesired) {
+		this->_vptType.desired = this->_vptType.current;
+		this->_surroundPosition.desired = this->_surroundPosition.current;
+	}
 }
 
 bool Headphones::performConnectHandshake()
@@ -258,8 +405,8 @@ bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 			static_cast<char>(variant)
 		};
 		if (auto payload = this->_conn.sendQuery(ncQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::NCASM_RET))) {
-			if (!ProtocolParser::applyAmbientSoundControlV2(*this, *payload)) {
-				ProtocolParser::applyAmbientSoundControl(*this, *payload);
+			if (!ProtocolParser::applyAmbientSoundControlV2(*this, *payload, true)) {
+				ProtocolParser::applyAmbientSoundControl(*this, *payload, true);
 			}
 		}
 	} else {
@@ -268,7 +415,9 @@ bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 			static_cast<char>(NC_ASM_INQUIRED_TYPE::NOISE_CANCELLING_AND_AMBIENT_SOUND_MODE)
 		};
 		if (auto payload = this->_conn.sendQuery(ncQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::NCASM_RET))) {
-			ProtocolParser::applyAmbientSoundControl(*this, *payload);
+			if (!ProtocolParser::applyAmbientSoundControlV1(*this, *payload, true)) {
+				ProtocolParser::applyAmbientSoundControl(*this, *payload, true);
+			}
 		}
 	}
 
@@ -333,28 +482,29 @@ bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 			ProtocolParser::applyEqualizer(nextStatus, *payload);
 			if (nextStatus.hasEqualizer) {
 				std::lock_guard guard(this->_propertyMtx);
+				const bool keepManualEdits = this->_eqUseBandPayload
+					&& this->_eqPreset.desired == EQ_PRESET::MANUAL
+					&& (!this->_eqPreset.isFulfilled()
+						|| !this->_eqBass.isFulfilled()
+						|| !this->_eqBands.isFulfilled());
 				this->_eqPreset.current = static_cast<EQ_PRESET>(nextStatus.eqPresetCode);
-				this->_eqPreset.desired = this->_eqPreset.current;
+				this->_eqBass.current = nextStatus.eqBass;
+				this->_eqBands.current = nextStatus.eqBands;
+				if (!keepManualEdits) {
+					this->_eqPreset.desired = this->_eqPreset.current;
+					this->_eqBass.desired = this->_eqBass.current;
+					this->_eqBands.desired = this->_eqBands.current;
+					this->_eqUseBandPayload = false;
+				}
 			}
 		}
 	}
 
 	if (this->_capabilities.supportsVirtualSound) {
-		const Buffer soundQuery = {
-			static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
-			0x01
-		};
-		if (auto payload = this->_conn.sendQuery(soundQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
-			ProtocolParser::applyVirtualSound(*this, *payload);
-		}
-
-		const Buffer soundPosQuery = {
-			static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
-			0x02
-		};
-		if (auto payload = this->_conn.sendQuery(soundPosQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
-			ProtocolParser::applyVirtualSound(*this, *payload);
-		}
+		this->updateVirtualSoundCurrentFromDevice(true);
+		std::lock_guard guard(this->_propertyMtx);
+		this->_vptType.fulfill();
+		this->_surroundPosition.fulfill();
 	}
 
 	if (this->_capabilities.supportsTouchSensor) {
@@ -376,7 +526,7 @@ bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 		const Buffer voiceQuery = {
 			static_cast<char>(VOICE_GUIDANCE_CMD::GET_PARAM),
 			static_cast<char>(VOICE_GUIDANCE_INQUIRED::VOICE_GUIDANCE_SETTING),
-			static_cast<char>(VOICE_GUIDANCE_INQUIRED::VOICE_GUIDANCE_SETTING)
+			0x01
 		};
 		if (auto payload = this->_conn.sendQuery(voiceQuery, DATA_TYPE::DATA_MDR_NO2, static_cast<unsigned char>(VOICE_GUIDANCE_CMD::RET_PARAM))) {
 			ProtocolParser::applyVoiceGuidance(nextStatus, *payload);
@@ -394,84 +544,292 @@ bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 	return nextStatus.hasBattery || nextStatus.hasCodec || nextStatus.hasEqualizer;
 }
 
-bool Headphones::isChanged()
+bool Headphones::hasAnyPendingChanges() const
 {
-	const bool virtualSoundOk = !this->_capabilities.supportsVirtualSound
-		|| (this->_surroundPosition.isFulfilled() && this->_vptType.isFulfilled());
-	const bool eqOk = !this->_capabilities.supportsEqualizer || this->_eqPreset.isFulfilled();
-	const bool touchOk = !this->_capabilities.supportsTouchSensor || this->_touchSensorEnabled.isFulfilled();
-	const bool voiceOk = !this->_capabilities.supportsVoiceGuidance || this->_voiceGuidanceEnabled.isFulfilled();
-
-	return !(this->_ambientSoundControl.isFulfilled() && this->_asmLevel.isFulfilled() && this->_focusOnVoice.isFulfilled()
-		&& virtualSoundOk && eqOk && touchOk && voiceOk);
+	if (this->hasPendingAmbientChanges() || this->hasPendingVirtualSoundChanges() || this->hasPendingEqChanges()) {
+		return true;
+	}
+	if (this->_capabilities.supportsTouchSensor && !this->_touchSensorEnabled.isFulfilled()) {
+		return true;
+	}
+	if (this->_capabilities.supportsVoiceGuidance && !this->_voiceGuidanceEnabled.isFulfilled()) {
+		return true;
+	}
+	return false;
 }
 
-void Headphones::setChanges()
+bool Headphones::isChanged()
 {
-	if (!(this->_ambientSoundControl.isFulfilled() && this->_focusOnVoice.isFulfilled() && this->_asmLevel.isFulfilled()))
-	{
-		const char asmLevel = this->_ambientSoundControl.desired
-			? static_cast<char>(std::min(this->_asmLevel.desired, this->_capabilities.asmMaxLevel))
-			: static_cast<char>(ASM_LEVEL_DISABLED);
+	return this->hasAnyPendingChanges();
+}
 
-		if (this->_capabilities.usesV2AmbientSound) {
-			this->_conn.sendCommand(CommandSerializer::serializeAmbientSoundControlV2(
-				this->_ambientSoundControl.desired,
-				this->_focusOnVoice.desired,
-				asmLevel,
-				this->_capabilities.supportsWindNoiseMode
-			));
-		} else {
-			auto ncAsmEffect = this->_ambientSoundControl.desired ? NC_ASM_EFFECT::ADJUSTMENT_COMPLETION : NC_ASM_EFFECT::OFF;
-			auto asmId = this->_focusOnVoice.desired ? ASM_ID::VOICE : ASM_ID::NORMAL;
+void Headphones::updateEqCurrentFromDevice()
+{
+	if (!this->_capabilities.supportsEqualizer) {
+		return;
+	}
 
-			this->_conn.sendCommand(CommandSerializer::serializeNcAndAsmSetting(
-				ncAsmEffect,
-				NC_ASM_SETTING_TYPE::LEVEL_ADJUSTMENT,
-				ASM_SETTING_TYPE::LEVEL_ADJUSTMENT,
-				asmId,
-				asmLevel,
-				this->_capabilities.asmMaxLevel
-			));
+	const Buffer eqQuery = {
+		static_cast<char>(PAYLOAD_CMD::EQ_GET),
+		0x01
+	};
+	DeviceStatus status = this->_deviceStatus;
+	if (auto payload = this->_conn.sendQuery(eqQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::EQ_RET))) {
+		if (ProtocolParser::applyEqualizer(status, *payload) && status.hasEqualizer) {
+			std::lock_guard guard(this->_propertyMtx);
+			this->_eqPreset.current = static_cast<EQ_PRESET>(status.eqPresetCode);
+			this->_eqBass.current = status.eqBass;
+			this->_eqBands.current = status.eqBands;
+			this->_deviceStatus.eqBass = status.eqBass;
+			this->_deviceStatus.eqBands = status.eqBands;
+			this->_deviceStatus.eqPresetCode = status.eqPresetCode;
+			this->_deviceStatus.hasEqualizer = true;
 		}
+	}
+}
 
+void Headphones::sendEqChanges()
+{
+	EQ_PRESET preset = EQ_PRESET::OFF;
+	int bass = 0;
+	std::array<int, EQ_BAND_COUNT> bands{};
+	bool useBands = false;
+	{
 		std::lock_guard guard(this->_propertyMtx);
+		preset = this->_eqPreset.desired;
+		bass = this->_eqBass.desired;
+		bands = this->_eqBands.desired;
+		useBands = this->_eqUseBandPayload;
+	}
+
+	if (useBands) {
+		// XM3: select Manual once, then push band steps (Sony rf/c.j uses UNSPECIFIED on wire).
+		this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(EQ_PRESET::MANUAL));
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		this->_conn.sendCommand(CommandSerializer::serializeEqualizerWithBands(
+			EQ_PRESET::UNSPECIFIED,
+			bass,
+			bands));
+		{
+			std::lock_guard guard(this->_propertyMtx);
+			this->_eqPreset.desired = EQ_PRESET::MANUAL;
+			this->_eqPreset.current = EQ_PRESET::MANUAL;
+			this->_eqBass.current = bass;
+			this->_eqBass.desired = bass;
+			this->_eqBands.current = bands;
+			this->_eqBands.desired = bands;
+			this->_deviceStatus.eqBass = bass;
+			this->_deviceStatus.eqBands = bands;
+			this->_deviceStatus.eqPresetCode = static_cast<int>(EQ_PRESET::MANUAL);
+			this->_deviceStatus.hasEqualizer = true;
+			this->_eqPreset.fulfill();
+			this->_eqBass.fulfill();
+			this->_eqBands.fulfill();
+		}
+		this->updateEqCurrentFromDevice();
+	} else {
+		this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(preset));
+		this->updateEqCurrentFromDevice();
+		std::lock_guard guard(this->_propertyMtx);
+		if (this->_eqPreset.current == preset) {
+			this->_eqPreset.fulfill();
+			this->_eqBass.fulfill();
+			this->_eqBands.fulfill();
+		}
+	}
+}
+
+void Headphones::sendAmbientV1Changes()
+{
+	bool ambientDesired = false;
+	bool focusDesired = false;
+	int levelDesired = 0;
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		ambientDesired = this->_ambientSoundControl.desired;
+		focusDesired = this->_focusOnVoice.desired;
+		levelDesired = ambientDesired
+			? std::max(0, std::min(this->_asmLevel.desired, this->_capabilities.asmMaxLevel))
+			: 0;
+	}
+
+	const ASM_ID asmId = focusDesired ? ASM_ID::VOICE : ASM_ID::NORMAL;
+	const int level = levelDesired;
+
+	auto sendAmbientV1 = [&](NC_ASM_EFFECT effect) {
+		this->_conn.sendCommand(CommandSerializer::serializeNcAndAsmAmbientLevelV1(effect, asmId, level));
+	};
+
+	if (ambientDesired) {
+		sendAmbientV1(NC_ASM_EFFECT::ADJUSTMENT_IN_PROGRESS);
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		sendAmbientV1(NC_ASM_EFFECT::ADJUSTMENT_COMPLETION);
+	} else {
+		sendAmbientV1(NC_ASM_EFFECT::OFF);
+	}
+
+	this->updateAmbientCurrentFromDevice();
+	std::lock_guard guard(this->_propertyMtx);
+	const bool ambientOk = this->_ambientSoundControl.current == this->_ambientSoundControl.desired;
+	const bool levelOk = !this->_ambientSoundControl.desired
+		|| this->_asmLevel.current == this->_asmLevel.desired;
+	const bool voiceOk = this->_focusOnVoice.current == this->_focusOnVoice.desired;
+	if (ambientOk && levelOk && voiceOk) {
 		this->_ambientSoundControl.fulfill();
 		this->_asmLevel.fulfill();
 		this->_focusOnVoice.fulfill();
 	}
+}
 
-	if (this->_capabilities.supportsVirtualSound && !(this->_vptType.isFulfilled() && this->_surroundPosition.isFulfilled())) {
-		VPT_INQUIRED_TYPE command = VPT_INQUIRED_TYPE::VPT;
-		unsigned char preset = 0;
+void Headphones::setAmbientChangesIfNeeded()
+{
+	if (this->_ambientSoundControl.isFulfilled() && this->_focusOnVoice.isFulfilled() && this->_asmLevel.isFulfilled()) {
+		return;
+	}
 
-		if (this->_vptType.desired != 0) {
-			command = VPT_INQUIRED_TYPE::VPT;
-			preset = static_cast<unsigned char>(this->_vptType.desired);
-		} else if (this->_surroundPosition.desired != SOUND_POSITION_PRESET::OFF) {
-			command = VPT_INQUIRED_TYPE::SOUND_POSITION;
-			preset = static_cast<unsigned char>(this->_surroundPosition.desired);
-		} else if (this->_surroundPosition.current != SOUND_POSITION_PRESET::OFF) {
-			command = VPT_INQUIRED_TYPE::SOUND_POSITION;
-			preset = static_cast<unsigned char>(SOUND_POSITION_PRESET::OFF);
-		} else if (this->_vptType.current != 0) {
-			command = VPT_INQUIRED_TYPE::VPT;
-			preset = 0;
+	const char asmLevel = this->_ambientSoundControl.desired
+		? static_cast<char>(std::min(this->_asmLevel.desired, this->_capabilities.asmMaxLevel))
+		: static_cast<char>(ASM_LEVEL_DISABLED);
+
+	if (this->_capabilities.usesV2AmbientSound) {
+		this->_conn.sendCommand(CommandSerializer::serializeAmbientSoundControlV2(
+			this->_ambientSoundControl.desired,
+			this->_focusOnVoice.desired,
+			asmLevel,
+			this->_capabilities.supportsWindNoiseMode
+		));
+		std::lock_guard guard(this->_propertyMtx);
+		this->_ambientSoundControl.fulfill();
+		this->_asmLevel.fulfill();
+		this->_focusOnVoice.fulfill();
+	} else {
+		sendAmbientV1Changes();
+	}
+}
+
+void Headphones::resyncAmbientAfterVirtualSoundIfNeeded()
+{
+	bool ambientOn = false;
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		ambientOn = this->_ambientSoundControl.desired;
+	}
+	if (this->_capabilities.usesV2AmbientSound || !ambientOn) {
+		return;
+	}
+
+	this->updateAmbientCurrentFromDevice();
+	if (!this->_asmLevel.isFulfilled() || !this->_ambientSoundControl.isFulfilled()) {
+		sendAmbientV1Changes();
+	}
+}
+
+void Headphones::setEqChangesIfNeeded()
+{
+	if (this->_capabilities.supportsEqualizer && this->hasPendingEqChanges()) {
+		this->sendEqChanges();
+	}
+}
+
+void Headphones::setVirtualSoundChangesIfNeeded()
+{
+	if (!this->_capabilities.supportsVirtualSound || (this->_vptType.isFulfilled() && this->_surroundPosition.isFulfilled())) {
+		return;
+	}
+
+	{
+		int desiredVpt = 0;
+		int currentVpt = 0;
+		SOUND_POSITION_PRESET desiredPosition = SOUND_POSITION_PRESET::OFF;
+		SOUND_POSITION_PRESET currentPosition = SOUND_POSITION_PRESET::OFF;
+		{
+			std::lock_guard guard(this->_propertyMtx);
+			desiredVpt = this->_vptType.desired;
+			currentVpt = this->_vptType.current;
+			desiredPosition = this->_surroundPosition.desired;
+			currentPosition = this->_surroundPosition.current;
 		}
 
-		this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(command, preset));
+		const bool wantVpt = desiredVpt != 0;
+		const bool wantPosition = desiredPosition != SOUND_POSITION_PRESET::OFF;
+		bool appliedSurround = false;
+		bool appliedPosition = false;
 
-		std::lock_guard guard(this->_propertyMtx);
-		this->_vptType.fulfill();
-		this->_surroundPosition.fulfill();
+		auto sendVpt = [&](unsigned char preset) {
+			this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(VPT_INQUIRED_TYPE::VPT, preset));
+		};
+		auto sendSoundPosition = [&](SOUND_POSITION_PRESET preset) {
+			this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(
+				VPT_INQUIRED_TYPE::SOUND_POSITION,
+				static_cast<unsigned char>(preset)));
+		};
+		const auto pauseForDevice = []() {
+			std::this_thread::sleep_for(std::chrono::milliseconds(120));
+		};
+
+		if (wantVpt) {
+			if (currentPosition != SOUND_POSITION_PRESET::OFF) {
+				sendSoundPosition(SOUND_POSITION_PRESET::OFF);
+				pauseForDevice();
+			}
+			sendVpt(static_cast<unsigned char>(desiredVpt));
+			appliedSurround = true;
+		} else if (wantPosition) {
+			const bool positionToPosition = currentVpt == 0
+				&& currentPosition != SOUND_POSITION_PRESET::OFF
+				&& desiredPosition != SOUND_POSITION_PRESET::OFF;
+			if (currentVpt != 0) {
+				sendVpt(0);
+				pauseForDevice();
+			}
+			// Sony app sends one preset only when already in sound-position mode (no audible Off hop).
+			if (!positionToPosition
+				&& currentPosition != SOUND_POSITION_PRESET::OFF
+				&& currentPosition != desiredPosition) {
+				sendSoundPosition(SOUND_POSITION_PRESET::OFF);
+				pauseForDevice();
+			}
+			sendSoundPosition(desiredPosition);
+			appliedPosition = true;
+		} else {
+			if (currentPosition != SOUND_POSITION_PRESET::OFF) {
+				sendSoundPosition(SOUND_POSITION_PRESET::OFF);
+				pauseForDevice();
+			}
+			if (currentVpt != 0) {
+				sendVpt(0);
+				pauseForDevice();
+			}
+		}
+
+		if (wantPosition && currentVpt == 0 && desiredPosition != SOUND_POSITION_PRESET::OFF) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(60));
+		} else if (!wantVpt && !wantPosition) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(180));
+		} else {
+			pauseForDevice();
+		}
+		this->updateVirtualSoundCurrentFromDevice();
+		{
+			std::lock_guard guard(this->_propertyMtx);
+			if (appliedSurround) {
+				this->_vptType.current = desiredVpt;
+				this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+			} else if (appliedPosition) {
+				this->_vptType.current = 0;
+				this->_surroundPosition.current = desiredPosition;
+			}
+			if (this->_vptType.current == this->_vptType.desired
+				&& this->_surroundPosition.current == this->_surroundPosition.desired) {
+				this->_vptType.fulfill();
+				this->_surroundPosition.fulfill();
+			}
+		}
 	}
+}
 
-	if (this->_capabilities.supportsEqualizer && !this->_eqPreset.isFulfilled()) {
-		this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(this->_eqPreset.desired));
-		std::lock_guard guard(this->_propertyMtx);
-		this->_eqPreset.fulfill();
-	}
-
+void Headphones::setTouchAndVoiceChangesIfNeeded()
+{
 	if (this->_capabilities.supportsTouchSensor && !this->_touchSensorEnabled.isFulfilled()) {
 		this->_conn.sendCommand(CommandSerializer::serializeTouchSensor(this->_touchSensorEnabled.desired));
 		std::lock_guard guard(this->_propertyMtx);
@@ -485,4 +843,13 @@ void Headphones::setChanges()
 		std::lock_guard guard(this->_propertyMtx);
 		this->_voiceGuidanceEnabled.fulfill();
 	}
+}
+
+void Headphones::setChanges()
+{
+	this->setAmbientChangesIfNeeded();
+	this->setVirtualSoundChangesIfNeeded();
+	this->resyncAmbientAfterVirtualSoundIfNeeded();
+	this->setEqChangesIfNeeded();
+	this->setTouchAndVoiceChangesIfNeeded();
 }

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Quit Omiiba Connect so /Applications/OmiibaConnect.app can be replaced in place.
+# No need to drag the old app to Trash before running the installer again.
+
+if pgrep -x OmiibaConnect >/dev/null 2>&1; then
+	osascript -e 'tell application "Omiiba Connect" to quit' 2>/dev/null || true
+	sleep 1
+fi
+
+if pgrep -x OmiibaConnect >/dev/null 2>&1; then
+	killall OmiibaConnect 2>/dev/null || true
+	sleep 0.5
+fi
+
+exit 0

@@ -3,7 +3,20 @@
     <title>Omiiba Connect</title>
     <organization>dev.omiiba</organization>
     <domains enable_localSystem="true"/>
-    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <options customize="never" require-scripts="true" hostArchitectures="arm64,x86_64"/>
+    <script><![CDATA[
+function installationCheck() {
+    if (system.files.fileExistsAtPath('/Applications/OmiibaConnect.app')) {
+        my.result.title = 'Update Omiiba Connect';
+        my.result.message = 'Version VERSION_PLACEHOLDER will replace the app in Applications. You do not need to remove the old copy first — the installer will quit Omiiba Connect and update in place.';
+    } else {
+        my.result.title = 'Install Omiiba Connect';
+        my.result.message = 'Version VERSION_PLACEHOLDER will be installed in Applications.';
+    }
+    my.result.type = 'Install';
+    return true;
+}
+    ]]></script>
     <welcome file="welcome.html" mime-type="text/html"/>
     <conclusion file="conclusion.html" mime-type="text/html"/>
     <choices-outline>
