@@ -1330,22 +1330,23 @@ NSStatusItem* statusItem = nil;
     [self updateHeadphones];
 }
 
-- (void)applyVirtualSoundOnBluetoothQueue:(uint64_t)token {
+- (void)applyVirtualSoundOnBluetoothQueue {
     dispatch_async(_bluetoothQueue, ^{
-        if (token != self->_virtualSoundApplyToken || !bt.isConnected() || headphones == nullptr) {
+        if (!bt.isConnected() || headphones == nullptr) {
             return;
         }
 
         const uint64_t session = _bluetoothSession;
+        const uint64_t tokenAtStart = _virtualSoundApplyToken;
         Headphones* hp = headphones;
 
+        if (!hp->hasPendingVirtualSoundChanges()) {
+            return;
+        }
+
         for (int attempt = 0; attempt < 2; attempt++) {
-            if (token != self->_virtualSoundApplyToken || session != self->_bluetoothSession
-                || !bt.isConnected() || headphones == nullptr) {
+            if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
                 return;
-            }
-            if (!hp->hasPendingVirtualSoundChanges()) {
-                break;
             }
 
             try {
@@ -1377,14 +1378,14 @@ NSStatusItem* statusItem = nil;
             [self updateGUI];
         });
 
-        if (headphones != nullptr && headphones->hasPendingVirtualSoundChanges()) {
-            [self applyVirtualSoundOnBluetoothQueue:self->_virtualSoundApplyToken];
+        if (headphones != nullptr
+            && (_virtualSoundApplyToken != tokenAtStart || headphones->hasPendingVirtualSoundChanges())) {
+            [self applyVirtualSoundOnBluetoothQueue];
         }
     });
 }
 
 - (void)scheduleVirtualSoundUpdate {
-    ++_vptDebounceGeneration;
     const uint64_t token = ++_virtualSoundApplyToken;
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
@@ -1393,7 +1394,7 @@ NSStatusItem* statusItem = nil;
             if (token != self->_virtualSoundApplyToken) {
                 return;
             }
-            [self applyVirtualSoundOnBluetoothQueue:token];
+            [self applyVirtualSoundOnBluetoothQueue];
         });
 }
 

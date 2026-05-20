@@ -94,6 +94,8 @@ public:
 	void applyEqReadback(const DeviceStatus& eqStatus);
 	void sendEqChanges();
 	void updateVirtualSoundCurrentFromDevice(bool syncDesired = false);
+	/** Updates current VPT/position from device only (leaves desired and dirty unchanged). */
+	void snapshotVirtualSoundFromDevice();
 	void updateAmbientCurrentFromDevice();
 private:
 	Property<bool> _ambientSoundControl = { 0 };

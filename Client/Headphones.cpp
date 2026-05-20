@@ -326,6 +326,49 @@ void Headphones::applyDeviceSurroundPosition(SOUND_POSITION_PRESET preset, bool 
 	}
 }
 
+void Headphones::snapshotVirtualSoundFromDevice()
+{
+	if (!this->_capabilities.supportsVirtualSound) {
+		return;
+	}
+
+	int vptFromDevice = 0;
+	bool haveVpt = false;
+	SOUND_POSITION_PRESET posFromDevice = SOUND_POSITION_PRESET::OFF;
+	bool havePos = false;
+
+	const Buffer soundQuery = {
+		static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
+		0x01
+	};
+	if (auto payload = this->_conn.sendQuery(soundQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
+		if (payload->size() >= 3 && static_cast<unsigned char>((*payload)[1]) == 0x01) {
+			vptFromDevice = static_cast<int>(static_cast<unsigned char>((*payload)[2]));
+			haveVpt = true;
+		}
+	}
+
+	const Buffer soundPosQuery = {
+		static_cast<char>(COMMAND_TYPE::VPT_GET_PARAM),
+		0x02
+	};
+	if (auto payload = this->_conn.sendQuery(soundPosQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::SOUND_RET))) {
+		if (payload->size() >= 3 && static_cast<unsigned char>((*payload)[1]) == 0x02) {
+			posFromDevice = static_cast<SOUND_POSITION_PRESET>((*payload)[2]);
+			havePos = true;
+		}
+	}
+
+	std::lock_guard guard(this->_propertyMtx);
+	if (haveVpt && vptFromDevice != 0) {
+		this->_vptType.current = vptFromDevice;
+		this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+	} else {
+		this->_vptType.current = 0;
+		this->_surroundPosition.current = havePos ? posFromDevice : SOUND_POSITION_PRESET::OFF;
+	}
+}
+
 void Headphones::updateVirtualSoundCurrentFromDevice(bool syncDesired)
 {
 	if (!this->_capabilities.supportsVirtualSound) {
@@ -933,6 +976,8 @@ void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 	}
 
 	try {
+		this->snapshotVirtualSoundFromDevice();
+
 		int desiredVpt = 0;
 		int currentVpt = 0;
 		SOUND_POSITION_PRESET desiredPosition = SOUND_POSITION_PRESET::OFF;
@@ -978,17 +1023,17 @@ void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 			sendVpt(static_cast<unsigned char>(desiredVpt));
 			appliedSurround = true;
 		} else if (wantPosition) {
-			const bool positionToPosition = currentVpt == 0
-				&& currentPosition != SOUND_POSITION_PRESET::OFF
-				&& desiredPosition != SOUND_POSITION_PRESET::OFF;
 			if (currentVpt != 0) {
 				sendVpt(0);
 				pauseForDevice();
+				this->snapshotVirtualSoundFromDevice();
+				{
+					std::lock_guard guard(this->_propertyMtx);
+					currentVpt = this->_vptType.current;
+					currentPosition = this->_surroundPosition.current;
+				}
 			}
-			// Sony app sends one preset only when already in sound-position mode (no audible Off hop).
-			if (!positionToPosition
-				&& currentPosition != SOUND_POSITION_PRESET::OFF
-				&& currentPosition != desiredPosition) {
+			if (currentPosition != SOUND_POSITION_PRESET::OFF && currentPosition != desiredPosition) {
 				sendSoundPosition(SOUND_POSITION_PRESET::OFF);
 				pauseForDevice();
 			}
