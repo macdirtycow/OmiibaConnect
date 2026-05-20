@@ -72,8 +72,6 @@ public:
 	bool ensureConnectHandshake();
 	void ensureTransportReady();
 	void invalidateConnectHandshake();
-	bool hasOnlyVirtualSoundPending() const;
-	bool hasOnlyEqPending() const;
 	/** Lightweight round-trip; false means the RFCOMM link is stale. */
 	bool probeConnection();
 	bool refreshFromDevice(bool includeExtendedSettings = true);
@@ -81,7 +79,7 @@ public:
 	bool hasAnyPendingChanges() const;
 	void setChanges();
 	void setAmbientChangesIfNeeded();
-	void setVirtualSoundChangesIfNeeded(bool verifyFromDevice = true);
+	void setVirtualSoundChangesIfNeeded();
 	void resyncAmbientAfterVirtualSoundIfNeeded();
 	void setEqChangesIfNeeded();
 	void setTouchAndVoiceChangesIfNeeded();
@@ -116,10 +114,8 @@ private:
 	DeviceCapabilities _capabilities;
 	std::string _deviceName;
 	bool _handshakeComplete = false;
-	bool _virtualSoundDirty = false;
 	std::chrono::steady_clock::time_point _lastHandshakeAt{};
 	BluetoothWrapper& _conn;
-	void markVirtualSoundDirty();
 };
 
 template<class T>
