@@ -127,8 +127,7 @@ NSStatusItem* statusItem = nil;
     BOOL _refreshInProgressFlag;
     NSInteger _ancDebounceGeneration;
     NSInteger _eqDebounceGeneration;
-    NSInteger _vptDebounceGeneration;
-    uint64_t _virtualSoundApplyToken;
+    uint64_t _settingsApplyGeneration;
     NSInteger _eqManualUiHoldGeneration;
     uint64_t _bluetoothSession;
     NSMenu* _statusMenu;
@@ -591,7 +590,7 @@ NSStatusItem* statusItem = nil;
             if (debounceGeneration != self->_eqDebounceGeneration) {
                 return;
             }
-            [self updateHeadphones];
+            [self scheduleSettingsApply];
             dispatch_after(
                 dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
                 dispatch_get_main_queue(),
@@ -1330,28 +1329,57 @@ NSStatusItem* statusItem = nil;
     [self updateHeadphones];
 }
 
-- (void)applyVirtualSoundOnBluetoothQueue {
+- (void)flushPendingSettingsOnBluetoothQueue {
     dispatch_async(_bluetoothQueue, ^{
         if (!bt.isConnected() || headphones == nullptr) {
             return;
         }
 
         const uint64_t session = _bluetoothSession;
-        const uint64_t tokenAtStart = _virtualSoundApplyToken;
+        const uint64_t genAtStart = _settingsApplyGeneration;
         Headphones* hp = headphones;
 
-        if (!hp->hasPendingVirtualSoundChanges()) {
+        if (!hp->hasAnyPendingChanges()) {
             return;
         }
 
+        const bool virtualPending = hp->hasPendingVirtualSoundChanges();
+        const bool eqPending = hp->hasPendingEqChanges();
+
         for (int attempt = 0; attempt < 2; attempt++) {
-            if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
+            if (genAtStart != _settingsApplyGeneration || session != _bluetoothSession
+                || !bt.isConnected() || headphones == nullptr) {
                 return;
             }
 
             try {
                 hp->ensureTransportReady();
-                hp->setVirtualSoundChangesIfNeeded(false);
+                if (genAtStart != _settingsApplyGeneration) {
+                    return;
+                }
+
+                if (virtualPending) {
+                    hp->setVirtualSoundChangesIfNeeded(false);
+                }
+                if (genAtStart != _settingsApplyGeneration) {
+                    return;
+                }
+
+                if (eqPending) {
+                    if (virtualPending) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                    }
+                    hp->setEqChangesIfNeeded();
+                }
+                if (genAtStart != _settingsApplyGeneration) {
+                    return;
+                }
+
+                if (hp->hasPendingAmbientChanges()) {
+                    hp->resyncAmbientAfterVirtualSoundIfNeeded();
+                    hp->setAmbientChangesIfNeeded();
+                }
+                hp->setTouchAndVoiceChangesIfNeeded();
                 break;
             } catch (RecoverableException& exc) {
                 if (attempt == 0) {
@@ -1360,14 +1388,14 @@ NSStatusItem* statusItem = nil;
                     continue;
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    [self.connectedLabel setStringValue:@"Virtual sound failed — try Refresh"];
+                    [self.connectedLabel setStringValue:@"Setting failed — try Refresh"];
                     [self displayError:exc];
                 });
                 return;
             } catch (const std::exception& exc) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     RecoverableException recoverable(exc.what(), false);
-                    [self.connectedLabel setStringValue:@"Virtual sound failed — try Refresh"];
+                    [self.connectedLabel setStringValue:@"Setting failed — try Refresh"];
                     [self displayError:recoverable];
                 });
                 return;
@@ -1379,22 +1407,24 @@ NSStatusItem* statusItem = nil;
         });
 
         if (headphones != nullptr
-            && (_virtualSoundApplyToken != tokenAtStart || headphones->hasPendingVirtualSoundChanges())) {
-            [self applyVirtualSoundOnBluetoothQueue];
+            && (genAtStart != _settingsApplyGeneration || headphones->hasAnyPendingChanges())) {
+            [self flushPendingSettingsOnBluetoothQueue];
         }
     });
 }
 
-- (void)scheduleVirtualSoundUpdate {
-    const uint64_t token = ++_virtualSoundApplyToken;
+- (void)scheduleSettingsApply {
+    ++_settingsApplyGeneration;
+    ++_eqDebounceGeneration;
+    const uint64_t token = _settingsApplyGeneration;
     dispatch_after(
         dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
         dispatch_get_main_queue(),
         ^{
-            if (token != self->_virtualSoundApplyToken) {
+            if (token != _settingsApplyGeneration) {
                 return;
             }
-            [self applyVirtualSoundOnBluetoothQueue];
+            [self flushPendingSettingsOnBluetoothQueue];
         });
 }
 
@@ -1409,7 +1439,7 @@ NSStatusItem* statusItem = nil;
     [soundPosition setAction:nil];
     [soundPosition selectItemAtIndex:0];
     [soundPosition setAction:soundPositionAction];
-    [self scheduleVirtualSoundUpdate];
+    [self scheduleSettingsApply];
 }
 
 - (IBAction)soundPositionChanged:(id)sender {
@@ -1423,7 +1453,7 @@ NSStatusItem* statusItem = nil;
     [surround setAction:nil];
     [surround selectItemAtIndex:0];
     [surround setAction:surroundAction];
-    [self scheduleVirtualSoundUpdate];
+    [self scheduleSettingsApply];
 }
 
 - (IBAction)eqPresetChanged:(id)sender {
@@ -1454,18 +1484,8 @@ NSStatusItem* statusItem = nil;
         return;
     } else {
         headphones->setEqualizerPreset([self eqPresetForPopupIndex:self.eqPopup.indexOfSelectedItem]);
+        [self scheduleSettingsApply];
     }
-
-    const NSInteger debounceGeneration = ++_eqDebounceGeneration;
-    dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
-        dispatch_get_main_queue(),
-        ^{
-            if (debounceGeneration != self->_eqDebounceGeneration) {
-                return;
-            }
-            [self updateHeadphones];
-        });
 }
 
 - (IBAction)eqManualSliderChanged:(NSSlider*)sender {
@@ -1569,37 +1589,21 @@ NSStatusItem* statusItem = nil;
             return;
         }
 
+        if (hp->hasPendingVirtualSoundChanges() || hp->hasPendingEqChanges()) {
+            return;
+        }
+
         try {
-            if (hp->hasOnlyVirtualSoundPending()) {
-                hp->ensureTransportReady();
-                hp->setVirtualSoundChangesIfNeeded(false);
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self updateGUI];
-                });
-                return;
-            }
-
-            if (hp->hasOnlyEqPending()) {
-                hp->ensureTransportReady();
-                hp->setEqChangesIfNeeded();
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    [self updateGUI];
-                });
-                return;
-            }
-
             hp->ensureTransportReady();
 
             if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
                 return;
             }
 
-            hp->setVirtualSoundChangesIfNeeded(false);
             if (hp->hasPendingAmbientChanges()) {
                 hp->resyncAmbientAfterVirtualSoundIfNeeded();
             }
             hp->setAmbientChangesIfNeeded();
-            hp->setEqChangesIfNeeded();
             hp->setTouchAndVoiceChangesIfNeeded();
 
             dispatch_async(dispatch_get_main_queue(), ^{
