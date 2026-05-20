@@ -1200,7 +1200,8 @@ NSStatusItem* statusItem = nil;
             [self setExtendedControlsEnabled:YES];
             [self applyCapabilitiesToUI];
             [self updateStatusBarMenu];
-            [self refreshFromDevice:sender];
+            // Full refresh so VPT/sound position match what the XM3 still has after a previous session.
+            [self refreshFromDevice:self.refreshButton];
         } else {
             [self shutdownBluetoothSessionWithMainBlock:^{
                 [self displayDisconnectedWithText:@"Connection timed out"];
