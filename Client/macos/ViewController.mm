@@ -127,6 +127,7 @@ NSStatusItem* statusItem = nil;
     BOOL _refreshInProgressFlag;
     NSInteger _ancDebounceGeneration;
     NSInteger _eqDebounceGeneration;
+    NSInteger _vptDebounceGeneration;
     NSInteger _eqManualUiHoldGeneration;
     uint64_t _bluetoothSession;
     NSMenu* _statusMenu;
@@ -1327,8 +1328,21 @@ NSStatusItem* statusItem = nil;
     [self updateHeadphones];
 }
 
+- (void)scheduleVirtualSoundUpdate {
+    const NSInteger generation = ++_vptDebounceGeneration;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.04 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(),
+        ^{
+            if (generation != self->_vptDebounceGeneration) {
+                return;
+            }
+            [self updateHeadphones];
+        });
+}
+
 - (IBAction)surroundChanged:(id)sender {
-    if (headphones == nullptr || _refreshInProgressFlag) {
+    if (![self canControlHeadphones] || _refreshInProgressFlag) {
         return;
     }
 
@@ -1338,11 +1352,11 @@ NSStatusItem* statusItem = nil;
     [soundPosition setAction:nil];
     [soundPosition selectItemAtIndex:0];
     [soundPosition setAction:soundPositionAction];
-    [self updateHeadphones];
+    [self scheduleVirtualSoundUpdate];
 }
 
 - (IBAction)soundPositionChanged:(id)sender {
-    if (headphones == nullptr || _refreshInProgressFlag) {
+    if (![self canControlHeadphones] || _refreshInProgressFlag) {
         return;
     }
 
@@ -1352,7 +1366,7 @@ NSStatusItem* statusItem = nil;
     [surround setAction:nil];
     [surround selectItemAtIndex:0];
     [surround setAction:surroundAction];
-    [self updateHeadphones];
+    [self scheduleVirtualSoundUpdate];
 }
 
 - (IBAction)eqPresetChanged:(id)sender {
@@ -1370,7 +1384,7 @@ NSStatusItem* statusItem = nil;
                 return;
             }
             bt.serviceTransport();
-            headphones->ensureConnectHandshake();
+            headphones->ensureTransportReady();
             headphones->primeManualEqFromDevice();
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (debounceGeneration != self->_eqDebounceGeneration) {
@@ -1499,10 +1513,8 @@ NSStatusItem* statusItem = nil;
         }
 
         try {
-            bt.serviceTransport();
-
             if (hp->hasOnlyVirtualSoundPending()) {
-                hp->ensureConnectHandshake();
+                hp->ensureTransportReady();
                 hp->setVirtualSoundChangesIfNeeded(false);
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self updateGUI];
@@ -1511,7 +1523,7 @@ NSStatusItem* statusItem = nil;
             }
 
             if (hp->hasOnlyEqPending()) {
-                hp->ensureConnectHandshake();
+                hp->ensureTransportReady();
                 hp->setEqChangesIfNeeded();
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [self updateGUI];
@@ -1519,39 +1531,19 @@ NSStatusItem* statusItem = nil;
                 return;
             }
 
-            hp->ensureConnectHandshake();
+            hp->ensureTransportReady();
 
-            for (int round = 0; round < 3 && hp->hasAnyPendingChanges(); round++) {
-                if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
-                    return;
-                }
-
-                bt.serviceTransport();
-
-                hp->setVirtualSoundChangesIfNeeded(false);
-                if (hp->hasPendingVirtualSoundChanges()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(80));
-                    hp->setVirtualSoundChangesIfNeeded(true);
-                }
-                if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
-                    return;
-                }
-                if (hp->hasPendingAmbientChanges()) {
-                    hp->resyncAmbientAfterVirtualSoundIfNeeded();
-                }
-                hp->setAmbientChangesIfNeeded();
-                hp->setEqChangesIfNeeded();
-                hp->setTouchAndVoiceChangesIfNeeded();
-
-                if (!hp->hasAnyPendingChanges()) {
-                    break;
-                }
-                if (round < 2) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(120));
-                    hp->invalidateConnectHandshake();
-                    hp->ensureConnectHandshake();
-                }
+            if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
+                return;
             }
+
+            hp->setVirtualSoundChangesIfNeeded(false);
+            if (hp->hasPendingAmbientChanges()) {
+                hp->resyncAmbientAfterVirtualSoundIfNeeded();
+            }
+            hp->setAmbientChangesIfNeeded();
+            hp->setEqChangesIfNeeded();
+            hp->setTouchAndVoiceChangesIfNeeded();
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self updateGUI];

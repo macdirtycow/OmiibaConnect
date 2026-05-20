@@ -70,6 +70,7 @@ public:
 
 	bool performConnectHandshake();
 	bool ensureConnectHandshake();
+	void ensureTransportReady();
 	void invalidateConnectHandshake();
 	bool hasOnlyVirtualSoundPending() const;
 	bool hasOnlyEqPending() const;
@@ -113,8 +114,10 @@ private:
 	DeviceCapabilities _capabilities;
 	std::string _deviceName;
 	bool _handshakeComplete = false;
+	bool _virtualSoundDirty = false;
 	std::chrono::steady_clock::time_point _lastHandshakeAt{};
 	BluetoothWrapper& _conn;
+	void markVirtualSoundDirty();
 };
 
 template<class T>

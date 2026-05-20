@@ -69,13 +69,30 @@ bool Headphones::hasPendingAmbientChanges() const
 		|| !this->_focusOnVoice.isFulfilled();
 }
 
-void Headphones::setSurroundPosition(SOUND_POSITION_PRESET val)
+void Headphones::markVirtualSoundDirty()
 {
 	std::lock_guard guard(this->_propertyMtx);
-	if (val != SOUND_POSITION_PRESET::OFF) {
-		this->_vptType.desired = 0;
+	this->_virtualSoundDirty = true;
+}
+
+void Headphones::ensureTransportReady()
+{
+	this->_conn.serviceTransport();
+	if (!this->_handshakeComplete) {
+		this->performConnectHandshake();
 	}
-	this->_surroundPosition.desired = val;
+}
+
+void Headphones::setSurroundPosition(SOUND_POSITION_PRESET val)
+{
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		if (val != SOUND_POSITION_PRESET::OFF) {
+			this->_vptType.desired = 0;
+		}
+		this->_surroundPosition.desired = val;
+	}
+	this->markVirtualSoundDirty();
 }
 
 SOUND_POSITION_PRESET Headphones::getSurroundPosition()
@@ -85,11 +102,14 @@ SOUND_POSITION_PRESET Headphones::getSurroundPosition()
 
 void Headphones::setVptType(int val)
 {
-	std::lock_guard guard(this->_propertyMtx);
-	if (val != 0) {
-		this->_surroundPosition.desired = SOUND_POSITION_PRESET::OFF;
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		if (val != 0) {
+			this->_surroundPosition.desired = SOUND_POSITION_PRESET::OFF;
+		}
+		this->_vptType.desired = val;
 	}
-	this->_vptType.desired = val;
+	this->markVirtualSoundDirty();
 }
 
 int Headphones::getVptType()
@@ -112,6 +132,9 @@ SOUND_POSITION_PRESET Headphones::getDisplaySurroundPosition() const
 bool Headphones::hasPendingVirtualSoundChanges() const
 {
 	std::lock_guard guard(this->_propertyMtx);
+	if (this->_virtualSoundDirty) {
+		return true;
+	}
 	return !this->_vptType.isFulfilled() || !this->_surroundPosition.isFulfilled();
 }
 
@@ -370,7 +393,7 @@ bool Headphones::ensureConnectHandshake()
 {
 	if (this->_handshakeComplete) {
 		const auto elapsed = std::chrono::steady_clock::now() - this->_lastHandshakeAt;
-		if (elapsed < std::chrono::seconds(30)) {
+		if (elapsed < std::chrono::seconds(120)) {
 			return true;
 		}
 	}
@@ -878,8 +901,16 @@ void Headphones::setEqChangesIfNeeded()
 
 void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 {
-	if (!this->_capabilities.supportsVirtualSound || (this->_vptType.isFulfilled() && this->_surroundPosition.isFulfilled())) {
+	if (!this->_capabilities.supportsVirtualSound) {
 		return;
+	}
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		if (!this->_virtualSoundDirty
+			&& this->_vptType.isFulfilled()
+			&& this->_surroundPosition.isFulfilled()) {
+			return;
+		}
 	}
 
 	{
@@ -982,16 +1013,30 @@ void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 		} else {
 			std::lock_guard guard(this->_propertyMtx);
 			if (appliedSurround) {
+				this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+				this->_surroundPosition.desired = SOUND_POSITION_PRESET::OFF;
 				this->_vptType.fulfill();
 				this->_surroundPosition.fulfill();
 			} else if (appliedPosition) {
 				this->_vptType.current = 0;
+				this->_vptType.desired = 0;
+				this->_vptType.fulfill();
+				this->_surroundPosition.current = desiredPosition;
 				this->_surroundPosition.fulfill();
 			} else {
 				this->_vptType.current = 0;
+				this->_vptType.desired = 0;
 				this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+				this->_surroundPosition.desired = SOUND_POSITION_PRESET::OFF;
 				this->_vptType.fulfill();
 				this->_surroundPosition.fulfill();
+			}
+			this->_virtualSoundDirty = false;
+		}
+		if (verifyFromDevice) {
+			std::lock_guard guard(this->_propertyMtx);
+			if (this->_vptType.isFulfilled() && this->_surroundPosition.isFulfilled()) {
+				this->_virtualSoundDirty = false;
 			}
 		}
 	}
