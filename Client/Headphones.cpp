@@ -123,6 +123,7 @@ void Headphones::setEqualizerPreset(EQ_PRESET preset)
 	this->_eqUseBandPayload = false;
 	this->_eqBass.desired = this->_eqBass.current;
 	this->_eqBands.desired = this->_eqBands.current;
+	this->_eqApplyPending = true;
 }
 
 void Headphones::setEqualizerWithBands(EQ_PRESET preset, int clearBass, const std::array<int, EQ_BAND_COUNT>& bands)
@@ -132,6 +133,7 @@ void Headphones::setEqualizerWithBands(EQ_PRESET preset, int clearBass, const st
 	this->_eqBass.desired = clearBass;
 	this->_eqBands.desired = bands;
 	this->_eqUseBandPayload = true;
+	this->_eqApplyPending = true;
 }
 
 EQ_PRESET Headphones::getEqualizerPreset() const
@@ -142,12 +144,18 @@ EQ_PRESET Headphones::getEqualizerPreset() const
 EQ_PRESET Headphones::getDisplayEqPreset() const
 {
 	std::lock_guard guard(this->_propertyMtx);
+	if (this->_eqPreset.desired == EQ_PRESET::MANUAL) {
+		return EQ_PRESET::MANUAL;
+	}
 	return this->_eqPreset.isFulfilled() ? this->_eqPreset.current : this->_eqPreset.desired;
 }
 
 bool Headphones::hasPendingEqChanges() const
 {
 	std::lock_guard guard(this->_propertyMtx);
+	if (this->_eqApplyPending) {
+		return true;
+	}
 	if (!this->_eqPreset.isFulfilled()) {
 		return true;
 	}
@@ -353,12 +361,60 @@ void Headphones::updateVirtualSoundCurrentFromDevice(bool syncDesired)
 	}
 }
 
-bool Headphones::performConnectHandshake()
+void Headphones::invalidateConnectHandshake()
+{
+	this->_handshakeComplete = false;
+}
+
+bool Headphones::ensureConnectHandshake()
 {
 	if (this->_handshakeComplete) {
-		return true;
+		const auto elapsed = std::chrono::steady_clock::now() - this->_lastHandshakeAt;
+		if (elapsed < std::chrono::seconds(30)) {
+			return true;
+		}
 	}
+	return this->performConnectHandshake();
+}
 
+bool Headphones::hasOnlyVirtualSoundPending() const
+{
+	if (!this->hasPendingVirtualSoundChanges()) {
+		return false;
+	}
+	if (this->hasPendingAmbientChanges() || this->hasPendingEqChanges()) {
+		return false;
+	}
+	std::lock_guard guard(this->_propertyMtx);
+	if (this->_capabilities.supportsTouchSensor && !this->_touchSensorEnabled.isFulfilled()) {
+		return false;
+	}
+	if (this->_capabilities.supportsVoiceGuidance && !this->_voiceGuidanceEnabled.isFulfilled()) {
+		return false;
+	}
+	return true;
+}
+
+bool Headphones::hasOnlyEqPending() const
+{
+	if (!this->hasPendingEqChanges()) {
+		return false;
+	}
+	if (this->hasPendingAmbientChanges() || this->hasPendingVirtualSoundChanges()) {
+		return false;
+	}
+	std::lock_guard guard(this->_propertyMtx);
+	if (this->_capabilities.supportsTouchSensor && !this->_touchSensorEnabled.isFulfilled()) {
+		return false;
+	}
+	if (this->_capabilities.supportsVoiceGuidance && !this->_voiceGuidanceEnabled.isFulfilled()) {
+		return false;
+	}
+	return true;
+}
+
+bool Headphones::performConnectHandshake()
+{
 	// Sony | Sound Connect always sends CONNECT_GET_PROTOCOL_INFO first; without it
 	// many GET commands return nothing (mdr-protocol / APK: tandemfamily.message.mdr).
 	// Gadgetbridge init: { 0x00, 0x00 } — required before other queries respond.
@@ -398,6 +454,7 @@ bool Headphones::performConnectHandshake()
 	);
 
 	this->_handshakeComplete = true;
+	this->_lastHandshakeAt = std::chrono::steady_clock::now();
 	return true;
 }
 
@@ -515,21 +572,8 @@ bool Headphones::refreshFromDevice(bool includeExtendedSettings)
 		if (auto payload = this->_conn.sendQuery(eqQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::EQ_RET))) {
 			ProtocolParser::applyEqualizer(nextStatus, *payload);
 			if (nextStatus.hasEqualizer) {
-				std::lock_guard guard(this->_propertyMtx);
-				const bool keepManualEdits = this->_eqUseBandPayload
-					&& this->_eqPreset.desired == EQ_PRESET::MANUAL
-					&& (!this->_eqPreset.isFulfilled()
-						|| !this->_eqBass.isFulfilled()
-						|| !this->_eqBands.isFulfilled());
-				this->_eqPreset.current = static_cast<EQ_PRESET>(nextStatus.eqPresetCode);
-				this->_eqBass.current = nextStatus.eqBass;
-				this->_eqBands.current = nextStatus.eqBands;
-				if (!keepManualEdits) {
-					this->_eqPreset.desired = this->_eqPreset.current;
-					this->_eqBass.desired = this->_eqBass.current;
-					this->_eqBands.desired = this->_eqBands.current;
-					this->_eqUseBandPayload = false;
-				}
+				DeviceStatus eqStatus = nextStatus;
+				this->applyEqReadback(eqStatus);
 			}
 		}
 	}
@@ -597,6 +641,69 @@ bool Headphones::isChanged()
 	return this->hasAnyPendingChanges();
 }
 
+void Headphones::applyEqReadback(const DeviceStatus& eqStatus)
+{
+	if (!eqStatus.hasEqualizer) {
+		return;
+	}
+
+	std::lock_guard guard(this->_propertyMtx);
+	const bool manualMode = this->_eqPreset.desired == EQ_PRESET::MANUAL;
+	this->_eqPreset.current = static_cast<EQ_PRESET>(eqStatus.eqPresetCode);
+	this->_deviceStatus.eqBass = eqStatus.eqBass;
+	this->_deviceStatus.eqBands = eqStatus.eqBands;
+	this->_deviceStatus.eqPresetCode = eqStatus.eqPresetCode;
+	this->_deviceStatus.hasEqualizer = true;
+
+	if (!manualMode) {
+		this->_eqPreset.desired = this->_eqPreset.current;
+		this->_eqBass.current = eqStatus.eqBass;
+		this->_eqBass.desired = eqStatus.eqBass;
+		this->_eqBands.current = eqStatus.eqBands;
+		this->_eqBands.desired = eqStatus.eqBands;
+		this->_eqUseBandPayload = false;
+	} else {
+		this->_eqUseBandPayload = true;
+	}
+}
+
+bool Headphones::primeManualEqFromDevice()
+{
+	if (!this->_capabilities.supportsEqualizer) {
+		return false;
+	}
+
+	const Buffer eqQuery = {
+		static_cast<char>(PAYLOAD_CMD::EQ_GET),
+		0x01
+	};
+	DeviceStatus status = this->_deviceStatus;
+	const auto payload = this->_conn.sendQuery(eqQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::EQ_RET));
+	if (!payload || !ProtocolParser::applyEqualizer(status, *payload)) {
+		return false;
+	}
+
+	{
+		std::lock_guard guard(this->_propertyMtx);
+		this->_eqPreset.desired = EQ_PRESET::MANUAL;
+		this->_eqPreset.current = EQ_PRESET::MANUAL;
+		this->_eqBass.current = status.eqBass;
+		this->_eqBass.desired = status.eqBass;
+		this->_eqBands.current = status.eqBands;
+		this->_eqBands.desired = status.eqBands;
+		this->_eqUseBandPayload = true;
+		this->_eqApplyPending = false;
+		this->_eqPreset.fulfill();
+		this->_eqBass.fulfill();
+		this->_eqBands.fulfill();
+		this->_deviceStatus.eqBass = status.eqBass;
+		this->_deviceStatus.eqBands = status.eqBands;
+		this->_deviceStatus.eqPresetCode = status.eqPresetCode;
+		this->_deviceStatus.hasEqualizer = true;
+	}
+	return true;
+}
+
 void Headphones::updateEqCurrentFromDevice()
 {
 	if (!this->_capabilities.supportsEqualizer) {
@@ -609,20 +716,8 @@ void Headphones::updateEqCurrentFromDevice()
 	};
 	DeviceStatus status = this->_deviceStatus;
 	if (auto payload = this->_conn.sendQuery(eqQuery, DATA_TYPE::DATA_MDR, static_cast<unsigned char>(PAYLOAD_CMD::EQ_RET))) {
-		if (ProtocolParser::applyEqualizer(status, *payload) && status.hasEqualizer) {
-			std::lock_guard guard(this->_propertyMtx);
-			const bool keepManualBands = this->_eqPreset.desired == EQ_PRESET::MANUAL
-				&& this->_eqUseBandPayload
-				&& this->_eqBands.isFulfilled();
-			this->_eqPreset.current = static_cast<EQ_PRESET>(status.eqPresetCode);
-			if (!keepManualBands) {
-				this->_eqBass.current = status.eqBass;
-				this->_eqBands.current = status.eqBands;
-			}
-			this->_deviceStatus.eqBass = status.eqBass;
-			this->_deviceStatus.eqBands = status.eqBands;
-			this->_deviceStatus.eqPresetCode = status.eqPresetCode;
-			this->_deviceStatus.hasEqualizer = true;
+		if (ProtocolParser::applyEqualizer(status, *payload)) {
+			this->applyEqReadback(status);
 		}
 	}
 }
@@ -641,14 +736,23 @@ void Headphones::sendEqChanges()
 		useBands = this->_eqUseBandPayload;
 	}
 
+	constexpr int kEqPostDrainMs = 50;
+
 	if (useBands) {
-		// XM3: select Manual once, then push band steps (Sony rf/c.j uses UNSPECIFIED on wire).
-		this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(EQ_PRESET::MANUAL));
-		std::this_thread::sleep_for(std::chrono::milliseconds(50));
-		this->_conn.sendCommand(CommandSerializer::serializeEqualizerWithBands(
-			EQ_PRESET::UNSPECIFIED,
-			bass,
-			bands));
+		// XM3: enter Manual once, then push band steps (UNSPECIFIED = band-only update on wire).
+		EQ_PRESET currentPreset = EQ_PRESET::OFF;
+		{
+			std::lock_guard guard(this->_propertyMtx);
+			currentPreset = this->_eqPreset.current;
+		}
+		if (currentPreset != EQ_PRESET::MANUAL) {
+			this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(EQ_PRESET::MANUAL), DATA_TYPE::DATA_MDR, kEqPostDrainMs);
+			std::this_thread::sleep_for(std::chrono::milliseconds(35));
+		}
+		this->_conn.sendCommand(
+			CommandSerializer::serializeEqualizerWithBands(EQ_PRESET::UNSPECIFIED, bass, bands),
+			DATA_TYPE::DATA_MDR,
+			kEqPostDrainMs);
 		{
 			std::lock_guard guard(this->_propertyMtx);
 			this->_eqPreset.desired = EQ_PRESET::MANUAL;
@@ -664,17 +768,19 @@ void Headphones::sendEqChanges()
 			this->_eqPreset.fulfill();
 			this->_eqBass.fulfill();
 			this->_eqBands.fulfill();
+			this->_eqApplyPending = false;
 		}
 		// Do not EQ_GET immediately after band write — XM3 read-back often zeros mid bands and flickers the UI.
 	} else {
-		this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(preset));
-		this->updateEqCurrentFromDevice();
+		this->_conn.sendCommand(CommandSerializer::serializeEqualizerPreset(preset), DATA_TYPE::DATA_MDR, kEqPostDrainMs);
 		std::lock_guard guard(this->_propertyMtx);
-		if (this->_eqPreset.current == preset) {
-			this->_eqPreset.fulfill();
-			this->_eqBass.fulfill();
-			this->_eqBands.fulfill();
-		}
+		this->_eqPreset.current = preset;
+		this->_eqBass.fulfill();
+		this->_eqBands.fulfill();
+		this->_eqPreset.fulfill();
+		this->_eqApplyPending = false;
+		this->_deviceStatus.eqPresetCode = static_cast<int>(preset);
+		this->_deviceStatus.hasEqualizer = true;
 	}
 }
 
@@ -770,7 +876,7 @@ void Headphones::setEqChangesIfNeeded()
 	}
 }
 
-void Headphones::setVirtualSoundChangesIfNeeded()
+void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 {
 	if (!this->_capabilities.supportsVirtualSound || (this->_vptType.isFulfilled() && this->_surroundPosition.isFulfilled())) {
 		return;
@@ -793,17 +899,25 @@ void Headphones::setVirtualSoundChangesIfNeeded()
 		const bool wantPosition = desiredPosition != SOUND_POSITION_PRESET::OFF;
 		bool appliedSurround = false;
 		bool appliedPosition = false;
+		const int stepPauseMs = verifyFromDevice ? 120 : 35;
+		const int postDrainMs = verifyFromDevice ? 200 : 45;
 
 		auto sendVpt = [&](unsigned char preset) {
-			this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(VPT_INQUIRED_TYPE::VPT, preset));
+			this->_conn.sendCommand(
+				CommandSerializer::serializeVPTSetting(VPT_INQUIRED_TYPE::VPT, preset),
+				DATA_TYPE::DATA_MDR,
+				postDrainMs);
 		};
 		auto sendSoundPosition = [&](SOUND_POSITION_PRESET preset) {
-			this->_conn.sendCommand(CommandSerializer::serializeVPTSetting(
-				VPT_INQUIRED_TYPE::SOUND_POSITION,
-				static_cast<unsigned char>(preset)));
+			this->_conn.sendCommand(
+				CommandSerializer::serializeVPTSetting(
+					VPT_INQUIRED_TYPE::SOUND_POSITION,
+					static_cast<unsigned char>(preset)),
+				DATA_TYPE::DATA_MDR,
+				postDrainMs);
 		};
-		const auto pauseForDevice = []() {
-			std::this_thread::sleep_for(std::chrono::milliseconds(120));
+		const auto pauseForDevice = [stepPauseMs]() {
+			std::this_thread::sleep_for(std::chrono::milliseconds(stepPauseMs));
 		};
 
 		if (wantVpt) {
@@ -841,25 +955,41 @@ void Headphones::setVirtualSoundChangesIfNeeded()
 			}
 		}
 
-		if (wantPosition && currentVpt == 0 && desiredPosition != SOUND_POSITION_PRESET::OFF) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(60));
-		} else if (!wantVpt && !wantPosition) {
-			std::this_thread::sleep_for(std::chrono::milliseconds(180));
+		if (verifyFromDevice) {
+			if (wantPosition && currentVpt == 0 && desiredPosition != SOUND_POSITION_PRESET::OFF) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(60));
+			} else if (!wantVpt && !wantPosition) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(180));
+			} else {
+				pauseForDevice();
+			}
+			this->updateVirtualSoundCurrentFromDevice();
+			{
+				std::lock_guard guard(this->_propertyMtx);
+				if (appliedSurround) {
+					this->_vptType.current = desiredVpt;
+					this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+				} else if (appliedPosition) {
+					this->_vptType.current = 0;
+					this->_surroundPosition.current = desiredPosition;
+				}
+				if (this->_vptType.current == this->_vptType.desired
+					&& this->_surroundPosition.current == this->_surroundPosition.desired) {
+					this->_vptType.fulfill();
+					this->_surroundPosition.fulfill();
+				}
+			}
 		} else {
-			pauseForDevice();
-		}
-		this->updateVirtualSoundCurrentFromDevice();
-		{
 			std::lock_guard guard(this->_propertyMtx);
 			if (appliedSurround) {
-				this->_vptType.current = desiredVpt;
-				this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
+				this->_vptType.fulfill();
+				this->_surroundPosition.fulfill();
 			} else if (appliedPosition) {
 				this->_vptType.current = 0;
-				this->_surroundPosition.current = desiredPosition;
-			}
-			if (this->_vptType.current == this->_vptType.desired
-				&& this->_surroundPosition.current == this->_surroundPosition.desired) {
+				this->_surroundPosition.fulfill();
+			} else {
+				this->_vptType.current = 0;
+				this->_surroundPosition.current = SOUND_POSITION_PRESET::OFF;
 				this->_vptType.fulfill();
 				this->_surroundPosition.fulfill();
 			}

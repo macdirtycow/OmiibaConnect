@@ -7,6 +7,7 @@
 #include "DeviceStatus.h"
 
 #include <array>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -48,6 +49,8 @@ public:
 
 	void setEqualizerPreset(EQ_PRESET preset);
 	void setEqualizerWithBands(EQ_PRESET preset, int clearBass, const std::array<int, EQ_BAND_COUNT>& bands);
+	/** Read current EQ from headphones into manual sliders (does not send EQ_SET). */
+	bool primeManualEqFromDevice();
 	EQ_PRESET getEqualizerPreset() const;
 	EQ_PRESET getDisplayEqPreset() const;
 	int getDisplayEqBass() const;
@@ -66,6 +69,10 @@ public:
 	void configureForDevice(std::string_view deviceName);
 
 	bool performConnectHandshake();
+	bool ensureConnectHandshake();
+	void invalidateConnectHandshake();
+	bool hasOnlyVirtualSoundPending() const;
+	bool hasOnlyEqPending() const;
 	/** Lightweight round-trip; false means the RFCOMM link is stale. */
 	bool probeConnection();
 	bool refreshFromDevice(bool includeExtendedSettings = true);
@@ -73,7 +80,7 @@ public:
 	bool hasAnyPendingChanges() const;
 	void setChanges();
 	void setAmbientChangesIfNeeded();
-	void setVirtualSoundChangesIfNeeded();
+	void setVirtualSoundChangesIfNeeded(bool verifyFromDevice = true);
 	void resyncAmbientAfterVirtualSoundIfNeeded();
 	void setEqChangesIfNeeded();
 	void setTouchAndVoiceChangesIfNeeded();
@@ -83,6 +90,7 @@ public:
 	void applyDeviceSurroundPosition(SOUND_POSITION_PRESET preset, bool syncDesired = false);
 	void sendAmbientV1Changes();
 	void updateEqCurrentFromDevice();
+	void applyEqReadback(const DeviceStatus& eqStatus);
 	void sendEqChanges();
 	void updateVirtualSoundCurrentFromDevice(bool syncDesired = false);
 	void updateAmbientCurrentFromDevice();
@@ -96,6 +104,7 @@ private:
 	Property<int> _eqBass = { 0 };
 	Property<std::array<int, EQ_BAND_COUNT>> _eqBands = { std::array<int, EQ_BAND_COUNT>{} };
 	bool _eqUseBandPayload = false;
+	bool _eqApplyPending = false;
 	Property<bool> _touchSensorEnabled = { true };
 	Property<bool> _voiceGuidanceEnabled = { true };
 	mutable std::mutex _propertyMtx;
@@ -104,6 +113,7 @@ private:
 	DeviceCapabilities _capabilities;
 	std::string _deviceName;
 	bool _handshakeComplete = false;
+	std::chrono::steady_clock::time_point _lastHandshakeAt{};
 	BluetoothWrapper& _conn;
 };
 

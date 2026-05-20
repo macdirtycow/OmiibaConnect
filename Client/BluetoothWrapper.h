@@ -24,7 +24,11 @@ public:
 	BluetoothWrapper(BluetoothWrapper&& other) noexcept;
 	BluetoothWrapper& operator=(BluetoothWrapper&& other) noexcept;
 
-	int sendCommand(const std::vector<char>& bytes, DATA_TYPE dataType = DATA_TYPE::DATA_MDR);
+	int sendCommand(
+		const std::vector<char>& bytes,
+		DATA_TYPE dataType = DATA_TYPE::DATA_MDR,
+		int postDrainMs = 200
+	);
 	std::optional<Buffer> sendQuery(
 		const Buffer& payloadBytes,
 		DATA_TYPE dataType,

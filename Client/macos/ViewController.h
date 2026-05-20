@@ -6,9 +6,9 @@
 #import <Cocoa/Cocoa.h>
 #import "AppDelegate.h"
 
-BluetoothWrapper bt = (BluetoothWrapper)nil;
-Headphones* headphones;
-NSStatusItem* statusItem;
+extern BluetoothWrapper bt;
+extern Headphones* headphones;
+extern NSStatusItem* statusItem;
 
 @interface ViewController : NSViewController
 @property (weak, nonatomic) IBOutlet NSTextField *connectedLabel;
@@ -40,4 +40,6 @@ NSStatusItem* statusItem;
 @property (strong, nonatomic) NSSegmentedControl *eqProfileSegment;
 
 - (void)applyCapabilitiesToUI;
+- (void)ensureStatusBarPresent;
+- (void)updateStatusBarMenu;
 @end

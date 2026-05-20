@@ -331,7 +331,7 @@
 					"@executable_path/../Frameworks",
 				);
 				GCC_PREPROCESSOR_DEFINITIONS = (
-					"__HEADPHONES_APP_VERSION__=\\\"2.3.24\\\"",
+					"__HEADPHONES_APP_VERSION__=\\\"2.4.0\\\"",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_CPLUSPLUSFLAGS = (
@@ -361,7 +361,7 @@
 					"@executable_path/../Frameworks",
 				);
 				GCC_PREPROCESSOR_DEFINITIONS = (
-					"__HEADPHONES_APP_VERSION__=\\\"2.3.24\\\"",
+					"__HEADPHONES_APP_VERSION__=\\\"2.4.0\\\"",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 11.0;
 				OTHER_CPLUSPLUSFLAGS = (

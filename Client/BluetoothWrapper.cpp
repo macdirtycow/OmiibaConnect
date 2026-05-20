@@ -54,7 +54,7 @@ void BluetoothWrapper::_sendAck(unsigned char deviceSeqNumber)
 	this->_connector->send(const_cast<char*>(data.data()), data.size());
 }
 
-int BluetoothWrapper::sendCommand(const std::vector<char>& bytes, DATA_TYPE dataType)
+int BluetoothWrapper::sendCommand(const std::vector<char>& bytes, DATA_TYPE dataType, int postDrainMs)
 {
 	std::lock_guard guard(this->_connectorMtx);
 	this->_recvStaging.clear();
@@ -77,7 +77,9 @@ int BluetoothWrapper::sendCommand(const std::vector<char>& bytes, DATA_TYPE data
 	}
 
 	this->_connector->setBlockingRecv(false);
-	_drainIncomingMessages(std::chrono::milliseconds(200));
+	if (postDrainMs > 0) {
+		_drainIncomingMessages(std::chrono::milliseconds(postDrainMs));
+	}
 	return bytesSent;
 }
 

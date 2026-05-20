@@ -117,6 +117,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     [root addArrangedSubview:content];
 }
 
+BluetoothWrapper bt = (BluetoothWrapper)nil;
+Headphones* headphones = nullptr;
+NSStatusItem* statusItem = nil;
+
 @implementation ViewController {
     NSInteger _refreshGeneration;
     dispatch_queue_t _bluetoothQueue;
@@ -124,10 +128,204 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     NSInteger _ancDebounceGeneration;
     NSInteger _eqDebounceGeneration;
     NSInteger _eqManualUiHoldGeneration;
+    uint64_t _bluetoothSession;
+    NSMenu* _statusMenu;
+    NSMenuItem* _statusMenuConnect;
+    NSMenuItem* _statusMenuDisconnect;
+    NSMenuItem* _statusMenuRefresh;
+    NSMenuItem* _statusMenuToggleAmbient;
     NSMutableArray<NSSlider*>* _eqSliders;
     NSMutableArray<NSTextField*>* _eqValueLabels;
     NSStackView* _eqContentStack;
     NSPoint _savedScrollOrigin;
+}
+
+- (BOOL)canControlHeadphones {
+    return headphones != nullptr && bt.isConnected();
+}
+
+- (NSImage*)omiibaMenuBarIcon {
+    NSString* const icnsPath = [NSBundle.mainBundle pathForResource:@"AppIcon" ofType:@"icns"];
+    NSImage* icon = icnsPath.length > 0 ? [[NSImage alloc] initWithContentsOfFile:icnsPath] : nil;
+    if (icon == nil) {
+        icon = [NSImage imageNamed:@"MenuBarIcon"];
+    }
+    if (icon == nil) {
+        icon = [NSWorkspace.sharedWorkspace iconForFile:NSBundle.mainBundle.bundlePath];
+    }
+    if (icon == nil) {
+        if (@available(macOS 11.0, *)) {
+            NSImageSymbolConfiguration* config =
+                [NSImageSymbolConfiguration configurationWithPointSize:15 weight:NSFontWeightSemibold];
+            NSImage* fallback = [NSImage imageWithSystemSymbolName:@"headphones.circle.fill"
+                                             accessibilityDescription:@"Omiiba Connect"];
+            return [fallback imageWithSymbolConfiguration:config] ?: fallback;
+        }
+        return [NSImage imageNamed:NSImageNameBluetoothTemplate];
+    }
+
+    icon = [icon copy];
+    [icon setSize:NSMakeSize(18, 18)];
+    [icon setTemplate:NO];
+    return icon;
+}
+
+- (void)ensureStatusBarPresent {
+    if (statusItem != nil) {
+        [NSStatusBar.systemStatusBar removeStatusItem:statusItem];
+        statusItem = nil;
+    }
+
+    statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSSquareStatusItemLength];
+    statusItem.autosaveName = @"dev.omiiba.connect.status";
+    [self setupStatusBarMenu];
+}
+
+- (void)setupStatusBarMenu {
+    _statusMenu = [[NSMenu alloc] initWithTitle:@"Omiiba Connect"];
+
+    NSMenuItem* openItem = [_statusMenu addItemWithTitle:@"Open Omiiba Connect"
+                                                  action:@selector(menuBarShowMainWindow:)
+                                           keyEquivalent:@""];
+    [openItem setTarget:self];
+
+    [_statusMenu addItem:[NSMenuItem separatorItem]];
+
+    _statusMenuConnect = [_statusMenu addItemWithTitle:@"Connect Headphones…"
+                                                action:@selector(menuBarConnect:)
+                                         keyEquivalent:@""];
+    [_statusMenuConnect setTarget:self];
+
+    _statusMenuDisconnect = [_statusMenu addItemWithTitle:@"Disconnect"
+                                                   action:@selector(menuBarDisconnect:)
+                                            keyEquivalent:@""];
+    [_statusMenuDisconnect setTarget:self];
+
+    _statusMenuRefresh = [_statusMenu addItemWithTitle:@"Refresh from Headphones"
+                                                action:@selector(menuBarRefresh:)
+                                         keyEquivalent:@""];
+    [_statusMenuRefresh setTarget:self];
+
+    [_statusMenu addItem:[NSMenuItem separatorItem]];
+
+    _statusMenuToggleAmbient = [_statusMenu addItemWithTitle:@"Quick: Toggle Ambient / Focus"
+                                                      action:@selector(menuBarToggleAmbient:)
+                                               keyEquivalent:@""];
+    [_statusMenuToggleAmbient setTarget:self];
+
+    [_statusMenu addItem:[NSMenuItem separatorItem]];
+
+    NSMenuItem* quitItem = [_statusMenu addItemWithTitle:@"Quit Omiiba Connect"
+                                                  action:@selector(terminate:)
+                                           keyEquivalent:@"q"];
+    [quitItem setTarget:NSApp];
+
+    statusItem.menu = _statusMenu;
+    [self updateStatusBarMenu];
+}
+
+- (void)updateStatusBarMenu {
+    if (statusItem == nil) {
+        return;
+    }
+
+    const BOOL connected = [self canControlHeadphones];
+    const BOOL busy = _refreshInProgressFlag;
+
+    // Full-color app icon — always clickable (Connect works without headphones).
+    statusItem.button.enabled = YES;
+    statusItem.button.appearsDisabled = NO;
+    statusItem.button.image = [self omiibaMenuBarIcon];
+    statusItem.button.imageScaling = NSImageScaleProportionallyDown;
+    statusItem.button.imagePosition = NSImageOnly;
+    if (connected) {
+        statusItem.button.toolTip = @"Omiiba Connect — connected (click for menu)";
+    } else {
+        statusItem.button.toolTip = @"Omiiba Connect — click to open or connect headphones";
+    }
+
+    _statusMenuConnect.enabled = !connected && !busy;
+    _statusMenuDisconnect.enabled = connected && !busy;
+    _statusMenuRefresh.enabled = connected && !busy;
+    _statusMenuToggleAmbient.enabled = connected && !busy;
+}
+
+- (void)menuBarShowMainWindow:(id)sender {
+    (void)sender;
+    [NSApp activateIgnoringOtherApps:YES];
+    NSWindow* window = self.view.window;
+    if (window == nil) {
+        window = NSApp.mainWindow;
+    }
+    if (window == nil) {
+        window = NSApp.windows.firstObject;
+    }
+    [window makeKeyAndOrderFront:self];
+}
+
+- (void)menuBarConnect:(id)sender {
+    (void)sender;
+    [self menuBarShowMainWindow:sender];
+    [self connectToDevice:self.connectButton];
+}
+
+- (void)menuBarDisconnect:(id)sender {
+    (void)sender;
+    if (![self canControlHeadphones]) {
+        return;
+    }
+    [self connectToDevice:self.connectButton];
+}
+
+- (void)menuBarRefresh:(id)sender {
+    (void)sender;
+    [self refreshFromDevice:self.refreshButton];
+}
+
+- (void)menuBarToggleAmbient:(id)sender {
+    [self statusItemClick:sender];
+}
+
+- (BOOL)recoverBluetoothLinkOnWorkerQueue {
+    if (!bt.isConnected() || headphones == nullptr) {
+        return NO;
+    }
+
+    bt.serviceTransport();
+    headphones->invalidateConnectHandshake();
+    headphones->performConnectHandshake();
+
+    for (int attempt = 0; attempt < 3; attempt++) {
+        bt.serviceTransport();
+        if (headphones->probeConnection()) {
+            return YES;
+        }
+        if (attempt < 2) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        }
+    }
+
+    (void)headphones->refreshFromDevice(false);
+    bt.serviceTransport();
+    return headphones->probeConnection();
+}
+
+- (void)shutdownBluetoothSessionWithMainBlock:(dispatch_block_t)mainBlock {
+    ++_bluetoothSession;
+    dispatch_queue_t queue = _bluetoothQueue ?: dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    dispatch_async(queue, ^{
+        bt.disconnect();
+        if (headphones != nullptr) {
+            delete headphones;
+            headphones = nullptr;
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateStatusBarMenu];
+            if (mainBlock) {
+                mainBlock();
+            }
+        });
+    });
 }
 @synthesize connectedLabel, connectButton, ANCSlider, ANCValueLabel, focusOnVoice, ANCEnabled, ANCValuePrefixLabel, virtualSoundLabel, soundPositionLabel, surroundLabel, soundPosition, surround;
 @synthesize batteryLabel, codecLabel, firmwareLabel, eqPopup, manualEqPanel, eqProfileSegment, touchSensorCheckbox, voiceGuidanceCheckbox, refreshButton;
@@ -136,12 +334,13 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 - (void)viewDidLoad {
     [super viewDidLoad];
     _bluetoothQueue = dispatch_queue_create("dev.omiiba.connect.bluetooth", DISPATCH_QUEUE_SERIAL);
-    std::unique_ptr<IBluetoothConnector> connector = std::make_unique<MacOSBluetoothConnector>();
-    bt = BluetoothWrapper(std::move(connector));
-    statusItem = [NSStatusBar.systemStatusBar statusItemWithLength: -1];
-    statusItem.button.image = [NSImage imageNamed:@"NSRefreshTemplate"];
-    [statusItem setTarget:self];
-    [statusItem setAction:@selector(statusItemClick:)];
+    static BOOL bluetoothWrapperInitialized = NO;
+    if (!bluetoothWrapperInitialized) {
+        std::unique_ptr<IBluetoothConnector> connector = std::make_unique<MacOSBluetoothConnector>();
+        bt = BluetoothWrapper(std::move(connector));
+        bluetoothWrapperInitialized = YES;
+    }
+    [self ensureStatusBarPresent];
 
     [self buildExtendedControls];
     [self setupModernLayout];
@@ -169,30 +368,34 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 
 - (void)handleWorkspaceDidWake:(NSNotification*)notification {
     (void)notification;
-    [self revalidateBluetoothSession];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self revalidateBluetoothSession];
+    });
 }
 
 - (void)revalidateBluetoothSession {
+    if (_bluetoothQueue == nil) {
+        return;
+    }
     dispatch_async(_bluetoothQueue, ^{
         if (!bt.isConnected() || headphones == nullptr) {
             return;
         }
 
-        bt.serviceTransport();
-
-        if (headphones->probeConnection()) {
+        if ([self recoverBluetoothLinkOnWorkerQueue]) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self enableInteractiveControlsIfConnected];
+                if (headphones != nullptr) {
+                    [self updateGUI];
+                }
             });
             return;
         }
 
-        bt.disconnect();
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self displayDisconnectedWithText:@"Connection lost — tap Connect"];
-            [self.connectButton setTitle:@"Connect"];
-            [self setConnectionIndicatorConnected:NO];
-            [self setExtendedControlsEnabled:NO];
+            if ([self canControlHeadphones]) {
+                [self.connectedLabel setStringValue:@"Connection stale — click Refresh"];
+            }
         });
     });
 }
@@ -365,7 +568,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 }
 
 - (void)applyManualEqFromSlidersWithPreset:(EQ_PRESET)preset {
-    if (headphones == nullptr || _eqSliders.count == 0) {
+    if (![self canControlHeadphones] || _eqSliders.count == 0) {
         return;
     }
 
@@ -380,7 +583,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     const NSInteger debounceGeneration = ++_eqDebounceGeneration;
     const NSInteger manualUiHoldGeneration = _eqManualUiHoldGeneration;
     dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
         dispatch_get_main_queue(),
         ^{
             if (debounceGeneration != self->_eqDebounceGeneration) {
@@ -388,7 +591,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
             }
             [self updateHeadphones];
             dispatch_after(
-                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
+                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
                 dispatch_get_main_queue(),
                 ^{
                     if (manualUiHoldGeneration == self->_eqManualUiHoldGeneration) {
@@ -801,6 +1004,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 
 - (void)setRefreshInProgress:(BOOL)inProgress {
     _refreshInProgressFlag = inProgress;
+    [self updateStatusBarMenu];
     if (inProgress) {
         [self.refreshSpinner startAnimation:nil];
         [self.refreshButton setEnabled:NO];
@@ -871,12 +1075,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     NSString *errorText;
     if (exc.shouldDisconnect) {
         errorText = @"Unexpected error occurred and disconnected.";
-        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-            bt.disconnect();
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self displayDisconnectedWithText:errorText];
-            });
-        });
+        [self shutdownBluetoothSessionWithMainBlock:^{
+            [self displayDisconnectedWithText:errorText];
+            [self.connectButton setTitle:@"Connect headphones"];
+        }];
     } else {
         errorText = @"Unexpected error occurred.";
         [connectedLabel setStringValue:errorText];
@@ -906,7 +1108,6 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     [surround selectItemAtIndex:0];
     [soundPosition selectItemAtIndex:0];
     [connectButton setTitle:@"Connect headphones"];
-    statusItem.button.image = [NSImage imageNamed:@"NSRefreshTemplate"];
     [self setConnectionIndicatorConnected:NO];
     [self setExtendedControlsEnabled:NO];
     [self setRefreshInProgress:NO];
@@ -915,9 +1116,14 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
     [self.codecLabel setStringValue:@"Codec: —"];
     [self.firmwareLabel setStringValue:@"Firmware: —"];
     [self applyCapabilitiesToUI];
+    [self updateStatusBarMenu];
 }
 
 - (void)statusItemClick:(id)sender {
+    if (![self canControlHeadphones]) {
+        return;
+    }
+
     headphones->setAmbientSoundControl(TRUE);
     if ([focusOnVoice isEnabled]) {
         [ANCSlider setIntValue:0];
@@ -938,14 +1144,11 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 }
 
 - (IBAction)connectToDevice:(id)sender {
-    statusItem.button.image = [NSImage imageNamed:@"NSRefreshTemplate"];
-
     if (bt.isConnected()) {
         _refreshGeneration++;
-        bt.disconnect();
-        delete headphones;
-        headphones = nullptr;
-        [self displayDisconnectedWithText:@"Not connected"];
+        [self shutdownBluetoothSessionWithMainBlock:^{
+            [self displayDisconnectedWithText:@"Not connected"];
+        }];
         return;
     }
 
@@ -954,6 +1157,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 
     if (result == kIOBluetoothUISuccess) {
         IOBluetoothDevice *device = [[dSelector getResults] lastObject];
+        if (device == nil) {
+            [self displayDisconnectedWithText:@"Not connected"];
+            return;
+        }
         try {
             bt.connect([[device addressString] UTF8String]);
         } catch (RecoverableException& exc) {
@@ -985,16 +1192,17 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
             [soundPositionLabel setTextColor:NSColor.labelColor];
             [ANCValuePrefixLabel setTextColor:NSColor.labelColor];
             [ANCValueLabel setTextColor:NSColor.labelColor];
-            statusItem.button.image = [NSImage imageNamed:@"NSHomeTemplate"];
             headphones = new Headphones(bt);
             headphones->configureForDevice([[device nameOrAddress] UTF8String]);
             [self setConnectionIndicatorConnected:YES];
             [self setExtendedControlsEnabled:YES];
             [self applyCapabilitiesToUI];
+            [self updateStatusBarMenu];
             [self refreshFromDevice:sender];
         } else {
-            [self displayDisconnectedWithText:@"Connection timed out"];
-            bt.disconnect();
+            [self shutdownBluetoothSessionWithMainBlock:^{
+                [self displayDisconnectedWithText:@"Connection timed out"];
+            }];
         }
     } else {
         [self displayDisconnectedWithText:@"Not connected"];
@@ -1025,9 +1233,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 
     const BOOL fullRefresh = (sender == self.refreshButton);
 
+    const uint64_t session = _bluetoothSession;
     dispatch_async(_bluetoothQueue, ^{
         try {
-            if (bt.isConnected() && headphones != nullptr) {
+            if (session == _bluetoothSession && bt.isConnected() && headphones != nullptr) {
                 headphones->refreshFromDevice(fullRefresh);
             }
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -1093,6 +1302,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 }
 
 - (IBAction)ANCEnabledButtonChanged:(id)sender {
+    if (![self canControlHeadphones] || _refreshInProgressFlag) {
+        return;
+    }
+
     headphones->setAmbientSoundControl(ANCEnabled.state);
     if (ANCEnabled.state == NSControlStateValueOn) {
         [ANCSlider setEnabled:YES];
@@ -1106,6 +1319,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 }
 
 - (IBAction)focusOnVoiceChanged:(id)sender {
+    if (![self canControlHeadphones] || _refreshInProgressFlag) {
+        return;
+    }
+
     headphones->setFocusOnVoice(focusOnVoice.state);
     [self updateHeadphones];
 }
@@ -1139,14 +1356,30 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 }
 
 - (IBAction)eqPresetChanged:(id)sender {
-    if (headphones == nullptr) {
+    if (![self canControlHeadphones] || _refreshInProgressFlag) {
         return;
     }
 
     [self updateManualEqPanelVisibility];
 
     if ([self isManualEqSelected]) {
-        [self applyManualEqFromSlidersWithPreset:EQ_PRESET::MANUAL];
+        const NSInteger debounceGeneration = ++_eqDebounceGeneration;
+        const uint64_t session = _bluetoothSession;
+        dispatch_async(_bluetoothQueue, ^{
+            if (session != self->_bluetoothSession || !bt.isConnected() || headphones == nullptr) {
+                return;
+            }
+            bt.serviceTransport();
+            headphones->ensureConnectHandshake();
+            headphones->primeManualEqFromDevice();
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (debounceGeneration != self->_eqDebounceGeneration) {
+                    return;
+                }
+                [self syncManualEqSlidersFromHeadphones];
+                [self applyManualEqFromSlidersWithPreset:EQ_PRESET::MANUAL];
+            });
+        });
         return;
     } else {
         headphones->setEqualizerPreset([self eqPresetForPopupIndex:self.eqPopup.indexOfSelectedItem]);
@@ -1154,7 +1387,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 
     const NSInteger debounceGeneration = ++_eqDebounceGeneration;
     dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
         dispatch_get_main_queue(),
         ^{
             if (debounceGeneration != self->_eqDebounceGeneration) {
@@ -1165,7 +1398,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 }
 
 - (IBAction)eqManualSliderChanged:(NSSlider*)sender {
-    if (headphones == nullptr || ![self isManualEqSelected]) {
+    if (![self canControlHeadphones] || ![self isManualEqSelected]) {
         return;
     }
 
@@ -1232,43 +1465,99 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
 }
 
 - (IBAction)touchSensorChanged:(id)sender {
+    if (![self canControlHeadphones] || _refreshInProgressFlag) {
+        return;
+    }
+
     headphones->setTouchSensorEnabled(self.touchSensorCheckbox.state == NSControlStateValueOn);
     [self updateHeadphones];
 }
 
 - (IBAction)voiceGuidanceChanged:(id)sender {
+    if (![self canControlHeadphones] || _refreshInProgressFlag) {
+        return;
+    }
+
     headphones->setVoiceGuidanceEnabled(self.voiceGuidanceCheckbox.state == NSControlStateValueOn);
     [self updateHeadphones];
 }
 
 - (void)updateHeadphones {
-    if (headphones == nullptr) {
+    if (![self canControlHeadphones]) {
         return;
     }
 
+    const uint64_t session = _bluetoothSession;
     dispatch_async(_bluetoothQueue, ^{
-        if (!bt.isConnected() || headphones == nullptr) {
+        if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
             return;
         }
 
-        if (!headphones->hasAnyPendingChanges()) {
+        Headphones* hp = headphones;
+        if (!hp->hasAnyPendingChanges()) {
             return;
         }
 
         try {
-            // Retry virtual sound only — avoids blocking EQ/ambient on a stuck VPT read-back.
-            for (int attempt = 0; attempt < 5 && headphones->hasPendingVirtualSoundChanges(); attempt++) {
-                headphones->setVirtualSoundChangesIfNeeded();
-                if (attempt < 4) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            bt.serviceTransport();
+
+            if (hp->hasOnlyVirtualSoundPending()) {
+                hp->ensureConnectHandshake();
+                hp->setVirtualSoundChangesIfNeeded(false);
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self updateGUI];
+                });
+                return;
+            }
+
+            if (hp->hasOnlyEqPending()) {
+                hp->ensureConnectHandshake();
+                hp->setEqChangesIfNeeded();
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self updateGUI];
+                });
+                return;
+            }
+
+            hp->ensureConnectHandshake();
+
+            for (int round = 0; round < 3 && hp->hasAnyPendingChanges(); round++) {
+                if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
+                    return;
+                }
+
+                bt.serviceTransport();
+
+                hp->setVirtualSoundChangesIfNeeded(false);
+                if (hp->hasPendingVirtualSoundChanges()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                    hp->setVirtualSoundChangesIfNeeded(true);
+                }
+                if (session != _bluetoothSession || !bt.isConnected() || headphones == nullptr) {
+                    return;
+                }
+                if (hp->hasPendingAmbientChanges()) {
+                    hp->resyncAmbientAfterVirtualSoundIfNeeded();
+                }
+                hp->setAmbientChangesIfNeeded();
+                hp->setEqChangesIfNeeded();
+                hp->setTouchAndVoiceChangesIfNeeded();
+
+                if (!hp->hasAnyPendingChanges()) {
+                    break;
+                }
+                if (round < 2) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+                    hp->invalidateConnectHandshake();
+                    hp->ensureConnectHandshake();
                 }
             }
-            headphones->resyncAmbientAfterVirtualSoundIfNeeded();
-            headphones->setAmbientChangesIfNeeded();
-            headphones->setEqChangesIfNeeded();
-            headphones->setTouchAndVoiceChangesIfNeeded();
+
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self updateGUI];
+                if (headphones != nullptr && headphones->hasAnyPendingChanges()) {
+                    [self.connectedLabel setStringValue:@"Some settings did not apply — click Refresh"];
+                }
             });
         } catch (RecoverableException& exc) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -1339,12 +1628,10 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
             [self->focusOnVoice setTitle:@"Focus on Voice"];
             [self->focusOnVoice setToolTip:nil];
             [self->focusOnVoice setEnabled:TRUE];
-            statusItem.button.image = [NSImage imageNamed:@"NSFlowViewTemplate"];
         }
         else {
             [self->focusOnVoice setTitle:@"Focus on Voice"];
             [self->focusOnVoice setToolTip:@"Available only at certain ambient sound levels."];
-            statusItem.button.image = [NSImage imageNamed:@"NSHomeTemplate"];
             [self->focusOnVoice setEnabled:FALSE];
         }
 
@@ -1376,9 +1663,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
                 status.protocolLabel.c_str()];
             [self.modelLabel setStringValue:modelLine];
         }
-        if ([self isManualEqSelected] && ![self shouldHoldManualEqSliderUi]) {
-            [self syncManualEqSlidersFromHeadphones];
-        } else if (!headphones->hasPendingEqChanges()) {
+        if (!headphones->hasPendingEqChanges()) {
             if (![self isManualEqSelected]) {
                 SEL eqAction = self.eqPopup.action;
                 [self.eqPopup setAction:nil];
@@ -1389,6 +1674,7 @@ static void OmiibaAddSection(NSStackView* root, NSString* title, NSView* content
         [self.touchSensorCheckbox setState:headphones->getTouchSensorEnabled() ? NSControlStateValueOn : NSControlStateValueOff];
         [self.voiceGuidanceCheckbox setState:headphones->getVoiceGuidanceEnabled() ? NSControlStateValueOn : NSControlStateValueOff];
         [self enableInteractiveControlsIfConnected];
+        [self updateStatusBarMenu];
         [self restoreScrollPosition];
     });
 }
