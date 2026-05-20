@@ -899,6 +899,25 @@ void Headphones::setEqChangesIfNeeded()
 	}
 }
 
+namespace {
+void sendVirtualSoundCommand(BluetoothWrapper& conn, const Buffer& bytes, int postDrainMs)
+{
+	for (int attempt = 0; attempt < 2; attempt++) {
+		try {
+			conn.sendCommand(bytes, DATA_TYPE::DATA_MDR, postDrainMs);
+			return;
+		} catch (const RecoverableException&) {
+			if (attempt == 0) {
+				conn.serviceTransport();
+				std::this_thread::sleep_for(std::chrono::milliseconds(80));
+				continue;
+			}
+			throw;
+		}
+	}
+}
+} // namespace
+
 void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 {
 	if (!this->_capabilities.supportsVirtualSound) {
@@ -913,7 +932,7 @@ void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 		}
 	}
 
-	{
+	try {
 		int desiredVpt = 0;
 		int currentVpt = 0;
 		SOUND_POSITION_PRESET desiredPosition = SOUND_POSITION_PRESET::OFF;
@@ -930,21 +949,21 @@ void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 		const bool wantPosition = desiredPosition != SOUND_POSITION_PRESET::OFF;
 		bool appliedSurround = false;
 		bool appliedPosition = false;
-		const int stepPauseMs = verifyFromDevice ? 120 : 35;
-		const int postDrainMs = verifyFromDevice ? 200 : 45;
+		const int stepPauseMs = verifyFromDevice ? 120 : 50;
+		const int postDrainMs = verifyFromDevice ? 200 : 30;
 
 		auto sendVpt = [&](unsigned char preset) {
-			this->_conn.sendCommand(
+			sendVirtualSoundCommand(
+				this->_conn,
 				CommandSerializer::serializeVPTSetting(VPT_INQUIRED_TYPE::VPT, preset),
-				DATA_TYPE::DATA_MDR,
 				postDrainMs);
 		};
 		auto sendSoundPosition = [&](SOUND_POSITION_PRESET preset) {
-			this->_conn.sendCommand(
+			sendVirtualSoundCommand(
+				this->_conn,
 				CommandSerializer::serializeVPTSetting(
 					VPT_INQUIRED_TYPE::SOUND_POSITION,
 					static_cast<unsigned char>(preset)),
-				DATA_TYPE::DATA_MDR,
 				postDrainMs);
 		};
 		const auto pauseForDevice = [stepPauseMs]() {
@@ -1039,6 +1058,9 @@ void Headphones::setVirtualSoundChangesIfNeeded(bool verifyFromDevice)
 				this->_virtualSoundDirty = false;
 			}
 		}
+	} catch (...) {
+		this->markVirtualSoundDirty();
+		throw;
 	}
 }
 

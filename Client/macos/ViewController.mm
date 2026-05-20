@@ -128,6 +128,7 @@ NSStatusItem* statusItem = nil;
     NSInteger _ancDebounceGeneration;
     NSInteger _eqDebounceGeneration;
     NSInteger _vptDebounceGeneration;
+    uint64_t _virtualSoundApplyToken;
     NSInteger _eqManualUiHoldGeneration;
     uint64_t _bluetoothSession;
     NSMenu* _statusMenu;
@@ -1328,16 +1329,70 @@ NSStatusItem* statusItem = nil;
     [self updateHeadphones];
 }
 
-- (void)scheduleVirtualSoundUpdate {
-    const NSInteger generation = ++_vptDebounceGeneration;
-    dispatch_after(
-        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.04 * NSEC_PER_SEC)),
-        dispatch_get_main_queue(),
-        ^{
-            if (generation != self->_vptDebounceGeneration) {
+- (void)applyVirtualSoundOnBluetoothQueue:(uint64_t)token {
+    dispatch_async(_bluetoothQueue, ^{
+        if (token != self->_virtualSoundApplyToken || !bt.isConnected() || headphones == nullptr) {
+            return;
+        }
+
+        const uint64_t session = _bluetoothSession;
+        Headphones* hp = headphones;
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            if (token != self->_virtualSoundApplyToken || session != self->_bluetoothSession
+                || !bt.isConnected() || headphones == nullptr) {
                 return;
             }
-            [self updateHeadphones];
+            if (!hp->hasPendingVirtualSoundChanges()) {
+                break;
+            }
+
+            try {
+                hp->ensureTransportReady();
+                hp->setVirtualSoundChangesIfNeeded(false);
+                break;
+            } catch (RecoverableException& exc) {
+                if (attempt == 0) {
+                    bt.serviceTransport();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self.connectedLabel setStringValue:@"Virtual sound failed — try Refresh"];
+                    [self displayError:exc];
+                });
+                return;
+            } catch (const std::exception& exc) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    RecoverableException recoverable(exc.what(), false);
+                    [self.connectedLabel setStringValue:@"Virtual sound failed — try Refresh"];
+                    [self displayError:recoverable];
+                });
+                return;
+            }
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self updateGUI];
+        });
+
+        if (headphones != nullptr && headphones->hasPendingVirtualSoundChanges()) {
+            [self applyVirtualSoundOnBluetoothQueue:self->_virtualSoundApplyToken];
+        }
+    });
+}
+
+- (void)scheduleVirtualSoundUpdate {
+    ++_vptDebounceGeneration;
+    const uint64_t token = ++_virtualSoundApplyToken;
+    dispatch_after(
+        dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
+        dispatch_get_main_queue(),
+        ^{
+            if (token != self->_virtualSoundApplyToken) {
+                return;
+            }
+            [self applyVirtualSoundOnBluetoothQueue:token];
         });
 }
 
